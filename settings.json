@@ -5,6 +5,6 @@
   "defaultModel": "z-ai/glm-5.1",
   "theme": "catppuccin-mocha",
   "packages": [
-    "../../pi-agent-config"
+    "/home/lawrence/pi-agent-config"
   ]
 }
