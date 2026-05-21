@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("search", {
+  pi.registerCommand("web-search", {
     description: "Search the web (e.g. /search rust async tutorial)",
     handler: async (args, ctx) => {
       if (!args) {
