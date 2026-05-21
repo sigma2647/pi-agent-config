@@ -1,10 +1,6 @@
 {
-  "lastChangelogVersion": "0.75.4",
   "defaultThinkingLevel": "medium",
   "defaultProvider": "openrouter",
   "defaultModel": "z-ai/glm-5.1",
-  "theme": "catppuccin-mocha",
-  "packages": [
-    "/home/lawrence/pi-agent-config"
-  ]
+  "theme": "catppuccin-mocha"
 }
