@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
+import { dispatchExtractor } from "./extractors/index.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -508,11 +509,18 @@ export async function fetchAndExtract(
 		return { url, title: "", content: "", error: "Aborted" };
 	}
 
+	let parsedUrl: URL;
 	try {
-		new URL(url);
+		parsedUrl = new URL(url);
 	} catch {
 		return { url, title: "", content: "", error: "Invalid URL" };
 	}
+
+	// Domain-specific extractors first (reddit/github/HN/…). On decline they
+	// return null and we fall through to the generic Readability/Jina pipeline.
+	const domainResult = await dispatchExtractor(parsedUrl, signal);
+	if (domainResult) return domainResult;
+	if (signal?.aborted) return { url, title: "", content: "", error: "Aborted" };
 
 	const httpResult = await extractViaHttp(url, signal);
 	if (signal?.aborted)

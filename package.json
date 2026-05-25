@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "pi": {
-    "extensions": ["./extensions/index.ts", "./extensions/web-search"],
+    "extensions": ["./extensions/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents"],
     "skills": ["./skills"],
     "prompts": ["./prompts"],
     "themes": ["./themes"]
