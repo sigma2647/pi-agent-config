@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
@@ -14,14 +12,67 @@ const MAX_PDF_SIZE = 20 * 1024 * 1024;
 const MIN_USEFUL_CONTENT = 500;
 const JINA_READER_BASE = "https://r.jina.ai/";
 const JINA_TIMEOUT_MS = 30000;
-const DEFUDDLE_TIMEOUT_MS = 20000;
-
-const execFileP = promisify(execFile);
 
 const turndown = new TurndownService({
 	headingStyle: "atx",
 	codeBlockStyle: "fenced",
 });
+
+// Clean up Turndown's raw output: drop decorative images, absolutize relative
+// links, collapse wiki citation backref junk. Cheap regex pass — adds ~1ms.
+// Sources of noise this targets (counted on a typical wiki article):
+//   • empty-alt images (~3): `![](/path.svg)` — purely decorative
+//   • icon images: `![Ambox_…](…)` / `![本页使用了…](…)` — wiki maintenance UI
+//   • backref clusters: `16.  ^ [**16.00**](#cite_ref-…) [**16.01**](…) …`
+//   • single backrefs: `17.  **[^](#cite_ref-17)** text`
+//   • relative URLs: `](/wiki/X)` / `](/w/index.php?…)` — break when copied out
+function postProcessMarkdown(md: string, baseUrl: string): string {
+	let out = md;
+
+	// 1. Drop low-information image lines
+	out = out.replace(/^!\[\]\([^)]+\)\s*$/gm, "");
+	out = out.replace(
+		/^!\[[^\]]*(?:Ambox|本[页頁]使用了|本[页頁]面|stub|[Ii]con|conversion)[^\]]*\]\([^)]+\)\s*$/gm,
+		"",
+	);
+
+	// 2. Absolutize relative links — both Markdown links `](path)` and image
+	//    srcs. Handles three forms:
+	//      ](/path)                   — root-relative
+	//      ](/path "title")           — root-relative with Markdown link title
+	//      ](//host/path)             — protocol-relative (common on wiki)
+	try {
+		const base = new URL(baseUrl);
+		// Protocol-relative FIRST so it doesn't get caught by the root-relative pass.
+		out = out.replace(
+			/\]\((\/\/[^\s)]+)(\s+"[^"]*")?\)/g,
+			(_m, p, title) => `](${base.protocol}${p}${title || ""})`,
+		);
+		out = out.replace(
+			/\]\((\/[^\s)]+)(\s+"[^"]*")?\)/g,
+			(_m, p, title) => `](${base.origin}${p}${title || ""})`,
+		);
+	} catch {
+		/* malformed url, skip */
+	}
+
+	// 3. Collapse wiki citation backref clusters
+	//    "16.  ^ [**16.00**](#cite_ref-…) [**16.01**](…) … actual text"
+	out = out.replace(
+		/^(\d+)\.\s+\^\s+(?:\[\*\*[\d.]+\*\*\]\(#cite_ref-[^)]+\)\s*)+/gm,
+		"$1. ",
+	);
+	// Single backref: "17.  **[^](#cite_ref-17)** text"
+	out = out.replace(
+		/^(\d+)\.\s+\*\*\[\^\]\(#cite_ref-\d+\)\*\*\s*/gm,
+		"$1. ",
+	);
+
+	// 4. Collapse triple+ blank lines (left over from dropped image lines)
+	out = out.replace(/\n{3,}/g, "\n\n");
+
+	return out.trim();
+}
 
 export interface FetchResult {
 	url: string;
@@ -334,76 +385,90 @@ function extractHeadingTitle(text: string): string | null {
 	return cleaned || null;
 }
 
-// ── Defuddle CLI Fallback ────────────────────────────────────────────
-// Local article-extraction CLI (https://github.com/kepano/defuddle). When the
-// generic Readability path can't get enough content but the page is still
-// server-rendered (e.g. mp.weixin.qq.com with visibility:hidden on the body),
-// defuddle's per-site heuristics usually pull it out. Local → faster + free
-// vs. Jina, so we try it first.
+// ── Defuddle (library API) ───────────────────────────────────────────
+// Article extractor from https://github.com/kepano/defuddle. Used to live as a
+// CLI subprocess + tmpfile dance (~4s per call, half of which was Node startup
+// and JSON serialization). The `defuddle/node` bundle exposes the same engine
+// as a function — we feed it the linkedom Document we already have and skip
+// the subprocess entirely. ~10x faster (~400ms total) and reuses the proxy-
+// aware HTML fetch we did in extractViaHttp.
+//
+// Why prefer defuddle over Readability for certain sites: it standardizes
+// footnotes / code blocks / callouts / math at the DOM level *before* Markdown
+// conversion, producing Pandoc-style `[^N]:` instead of wiki backref junk.
+// For citation-heavy pages (wikis, academic articles) it is dramatically
+// cleaner. For blogs/news, Readability is usually equivalent and faster.
 
-let defuddleAvailable: boolean | null = null;
-
-async function isDefuddleAvailable(): Promise<boolean> {
-	if (defuddleAvailable !== null) return defuddleAvailable;
-	try {
-		await execFileP("defuddle", ["--version"], { timeout: 3000 });
-		defuddleAvailable = true;
-	} catch {
-		defuddleAvailable = false;
-	}
-	return defuddleAvailable;
-}
-
-interface DefuddleJson {
+type DefuddleFn = (
+	input: Document | string,
+	url?: string,
+	options?: { markdown?: boolean; debug?: boolean; url?: string },
+) => Promise<{
 	title?: string;
 	author?: string;
 	published?: string;
 	description?: string;
-	domain?: string;
-	contentMarkdown?: string;
 	content?: string;
 	wordCount?: number;
+}>;
+
+let defuddleFn: DefuddleFn | null | undefined;
+
+async function loadDefuddle(): Promise<DefuddleFn | null> {
+	if (defuddleFn !== undefined) return defuddleFn;
+	try {
+		const m: any = await import("defuddle/node");
+		defuddleFn = (m.Defuddle ?? m.default?.Defuddle ?? null) as DefuddleFn | null;
+	} catch {
+		defuddleFn = null;
+	}
+	return defuddleFn;
 }
 
 async function extractWithDefuddle(
 	url: string,
 	signal?: AbortSignal,
+	prefetchedHtml?: string,
 ): Promise<FetchResult | null> {
-	if (!(await isDefuddleAvailable())) return null;
+	const Defuddle = await loadDefuddle();
+	if (!Defuddle) return null;
 	try {
-		// `url` goes through argv (not a shell string) so shell metacharacters
-		// in the URL can't escape into command injection.
-		const { stdout } = await execFileP("defuddle", ["parse", url, "-j"], {
-			encoding: "utf-8",
-			timeout: DEFUDDLE_TIMEOUT_MS,
-			signal,
-			maxBuffer: 16 * 1024 * 1024,
-		});
-		if (!stdout) return null;
-		let data: DefuddleJson;
-		try {
-			data = JSON.parse(stdout) as DefuddleJson;
-		} catch {
-			return null;
+		// Reuse HTML if extractViaHttp already fetched it (--defuddle path
+		// passes it through); otherwise fetch ourselves. Node's `fetch` honors
+		// NODE_USE_ENV_PROXY=1 via the dev.ts shebang.
+		let html = prefetchedHtml;
+		if (!html) {
+			const res = await fetch(url, {
+				signal,
+				headers: { "User-Agent": USER_AGENT },
+			});
+			if (!res.ok) return null;
+			html = await res.text();
 		}
-		const markdown = (data.contentMarkdown ?? "").trim();
+		if (signal?.aborted) return null;
+
+		const { document } = parseHTML(html);
+		const r = await Defuddle(document, url, { markdown: true });
+		const markdown = (r.content ?? "").trim();
 		if (markdown.length < MIN_USEFUL_CONTENT) return null;
 
 		const meta: string[] = [];
-		if (data.author) meta.push(`作者: ${data.author}`);
-		if (data.published) meta.push(`发布: ${data.published.slice(0, 10)}`);
-		if (data.wordCount) meta.push(`字数: ${data.wordCount}`);
+		if (r.author) meta.push(`作者: ${r.author}`);
+		if (r.published) meta.push(`发布: ${r.published.slice(0, 10)}`);
+		if (r.wordCount) meta.push(`字数: ${r.wordCount}`);
 
+		// Don't repeat the title inside `content` — dev.ts derives a `# title`
+		// header from `result.title`. Only emit extras that wouldn't otherwise
+		// surface (meta line + description).
 		const lines: string[] = [];
-		if (data.title) lines.push(`# ${data.title}`, "");
 		if (meta.length) lines.push(`> ${meta.join(" · ")}`, "");
-		if (data.description) lines.push(`> ${data.description}`, "");
-		if (data.title || meta.length || data.description) lines.push("---", "");
+		if (r.description) lines.push(`> ${r.description}`, "");
+		if (meta.length || r.description) lines.push("");
 		lines.push(markdown);
 
 		return {
 			url,
-			title: data.title ?? "",
+			title: r.title ?? "",
 			content: lines.join("\n"),
 			error: null,
 		};
@@ -546,7 +611,7 @@ async function extractWithPlaywright(
 	const article = reader.parse();
 	if (!article) return null;
 
-	const markdown = turndown.turndown(article.content).trim();
+	const markdown = postProcessMarkdown(turndown.turndown(article.content), url);
 	if (markdown.length < MIN_USEFUL_CONTENT) return null;
 	return {
 		url,
@@ -699,7 +764,7 @@ async function extractViaHttp(
 			};
 		}
 
-		const markdown = turndown.turndown(article.content);
+		const markdown = postProcessMarkdown(turndown.turndown(article.content), url);
 
 		if (markdown.length < MIN_USEFUL_CONTENT) {
 			return {
@@ -761,10 +826,38 @@ function describeNetworkError(err: unknown, url: string): string {
 
 // ── Public Fetch Function ────────────────────────────────────────────
 
+export interface FetchOptions {
+	debug?: boolean;
+	preferDefuddle?: boolean;
+}
+
 export async function fetchAndExtract(
 	url: string,
 	signal?: AbortSignal,
+	opts: FetchOptions = {},
 ): Promise<FetchResult> {
+	const debug = opts.debug || process.env.PI_WF_DEBUG === "1";
+	// Defuddle-by-default: cleaner Pandoc footnotes, schema.org metadata,
+	// more complete section structure → friendlier for both humans and LLMs.
+	// ~260ms slower than Readability but worth it. Disable per-call by setting
+	// `opts.preferDefuddle: false`, globally by `PI_WF_PREFER_DEFUDDLE=0`.
+	const preferDefuddle =
+		opts.preferDefuddle ?? process.env.PI_WF_PREFER_DEFUDDLE !== "0";
+	const log = (msg: string) => {
+		if (debug) process.stderr.write(`[pi-wf] ${msg}\n`);
+	};
+	const time = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+		const t0 = performance.now();
+		try {
+			const r = await fn();
+			log(`${name}: done in ${(performance.now() - t0).toFixed(0)}ms`);
+			return r;
+		} catch (e) {
+			log(`${name}: threw after ${(performance.now() - t0).toFixed(0)}ms — ${(e as Error)?.message ?? e}`);
+			throw e;
+		}
+	};
+
 	if (signal?.aborted) {
 		return { url, title: "", content: "", error: "Aborted" };
 	}
@@ -775,17 +868,46 @@ export async function fetchAndExtract(
 	} catch {
 		return { url, title: "", content: "", error: "Invalid URL" };
 	}
+	log(`url: ${url}`);
+	log(`host: ${parsedUrl.hostname}  proxy: ${process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "(none)"}`);
+	log(`mode: ${preferDefuddle ? "defuddle-primary" : "readability-primary"}`);
 
 	// Domain-specific extractors first (reddit/github/HN/…). On decline they
 	// return null and we fall through to the generic Readability/Jina pipeline.
-	const domainResult = await dispatchExtractor(parsedUrl, signal);
-	if (domainResult) return domainResult;
+	const domainResult = await time("domain-extractor", () =>
+		dispatchExtractor(parsedUrl, signal),
+	);
+	if (domainResult) {
+		log("→ returning: domain-extractor");
+		return domainResult;
+	}
 	if (signal?.aborted) return { url, title: "", content: "", error: "Aborted" };
 
-	const httpResult = await extractViaHttp(url, signal);
+	// Defuddle-primary path: try defuddle FIRST (cleaner Pandoc footnotes,
+	// schema.org metadata, more complete section structure). Falls through to
+	// Readability if defuddle isn't installed / errors / returns too little.
+	if (preferDefuddle) {
+		const r = await time("defuddle (primary)", () =>
+			extractWithDefuddle(url, signal),
+		);
+		if (r) {
+			log("→ returning: defuddle (primary)");
+			return r;
+		}
+		if (signal?.aborted) return { url, title: "", content: "", error: "Aborted" };
+		log("defuddle returned null — falling through to Readability");
+	}
+
+	const httpResult = await time("http+Readability", () =>
+		extractViaHttp(url, signal),
+	);
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
-	if (!httpResult.error) return httpResult;
+	if (!httpResult.error) {
+		log("→ returning: http+Readability");
+		return httpResult;
+	}
+	log(`http+Readability failed: ${httpResult.error.split("\n")[0]}`);
 
 	if (
 		httpResult.error.startsWith("Unsupported content type") ||
@@ -796,23 +918,46 @@ export async function fetchAndExtract(
 		// Jina, playwright) all hit the same wall. Return the diagnostic
 		// error from describeNetworkError without the misleading "may be
 		// JS-rendered or login-gated" suffix.
+		log("→ returning: http error (network/content type — no fallback)");
 		return httpResult;
 	}
 
-	const defuddleResult = await extractWithDefuddle(url, signal);
-	if (defuddleResult) return defuddleResult;
+	// Skip the middle-chain defuddle if defuddle-primary already ran it once
+	// and it returned null. Would waste ~300ms re-doing the same work.
+	if (!preferDefuddle) {
+		const defuddleResult = await time("defuddle", () =>
+			extractWithDefuddle(url, signal),
+		);
+		if (defuddleResult) {
+			log("→ returning: defuddle");
+			return defuddleResult;
+		}
+		if (signal?.aborted)
+			return { url, title: "", content: "", error: "Aborted" };
+	} else {
+		log("defuddle (middle): skipped (already tried as forced)");
+	}
+
+	const jinaResult = await time("jina-reader", () =>
+		extractWithJinaReader(url, signal),
+	);
+	if (jinaResult) {
+		log("→ returning: jina-reader");
+		return jinaResult;
+	}
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
 
-	const jinaResult = await extractWithJinaReader(url, signal);
-	if (jinaResult) return jinaResult;
+	const playwrightResult = await time("playwright", () =>
+		extractWithPlaywright(url, signal),
+	);
+	if (playwrightResult) {
+		log("→ returning: playwright");
+		return playwrightResult;
+	}
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
-
-	const playwrightResult = await extractWithPlaywright(url, signal);
-	if (playwrightResult) return playwrightResult;
-	if (signal?.aborted)
-		return { url, title: "", content: "", error: "Aborted" };
+	log("→ all fallbacks exhausted");
 
 	const hints = [
 		"The page may be JavaScript-rendered or login-gated. Try:",

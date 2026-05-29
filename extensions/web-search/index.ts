@@ -201,8 +201,8 @@ export default function (pi: ExtensionAPI) {
       const result = await runChain(args, ctx.signal ?? new AbortController().signal);
       const text =
         result.kind === "ok"
-          ? formatResults(result.backend, result.results)
-          : formatFailure(args, result.attempts);
+          ? formatResultsJson(result.backend, result.results)
+          : formatFailureJson(args, result.attempts);
 
       const truncation = truncateHead(text, {
         maxLines: DEFAULT_MAX_LINES,
