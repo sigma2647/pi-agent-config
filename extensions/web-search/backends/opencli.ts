@@ -1,7 +1,7 @@
 // backends/opencli.ts
 
 import { spawn } from "node:child_process";
-import type { Backend, SearchResult } from "./types";
+import type { Backend, SearchResult } from "./types.ts";
 
 async function which(cmd: string): Promise<boolean> {
   return await new Promise((resolve) => {

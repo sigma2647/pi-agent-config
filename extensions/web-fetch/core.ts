@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
@@ -11,6 +13,9 @@ const MAX_PDF_SIZE = 20 * 1024 * 1024;
 const MIN_USEFUL_CONTENT = 500;
 const JINA_READER_BASE = "https://r.jina.ai/";
 const JINA_TIMEOUT_MS = 30000;
+const DEFUDDLE_TIMEOUT_MS = 20000;
+
+const execFileP = promisify(execFile);
 
 const turndown = new TurndownService({
 	headingStyle: "atx",
@@ -328,6 +333,239 @@ function extractHeadingTitle(text: string): string | null {
 	return cleaned || null;
 }
 
+// ── Defuddle CLI Fallback ────────────────────────────────────────────
+// Local article-extraction CLI (https://github.com/kepano/defuddle). When the
+// generic Readability path can't get enough content but the page is still
+// server-rendered (e.g. mp.weixin.qq.com with visibility:hidden on the body),
+// defuddle's per-site heuristics usually pull it out. Local → faster + free
+// vs. Jina, so we try it first.
+
+let defuddleAvailable: boolean | null = null;
+
+async function isDefuddleAvailable(): Promise<boolean> {
+	if (defuddleAvailable !== null) return defuddleAvailable;
+	try {
+		await execFileP("defuddle", ["--version"], { timeout: 3000 });
+		defuddleAvailable = true;
+	} catch {
+		defuddleAvailable = false;
+	}
+	return defuddleAvailable;
+}
+
+interface DefuddleJson {
+	title?: string;
+	author?: string;
+	published?: string;
+	description?: string;
+	domain?: string;
+	contentMarkdown?: string;
+	content?: string;
+	wordCount?: number;
+}
+
+async function extractWithDefuddle(
+	url: string,
+	signal?: AbortSignal,
+): Promise<FetchResult | null> {
+	if (!(await isDefuddleAvailable())) return null;
+	try {
+		// `url` goes through argv (not a shell string) so shell metacharacters
+		// in the URL can't escape into command injection.
+		const { stdout } = await execFileP("defuddle", ["parse", url, "-j"], {
+			encoding: "utf-8",
+			timeout: DEFUDDLE_TIMEOUT_MS,
+			signal,
+			maxBuffer: 16 * 1024 * 1024,
+		});
+		if (!stdout) return null;
+		let data: DefuddleJson;
+		try {
+			data = JSON.parse(stdout) as DefuddleJson;
+		} catch {
+			return null;
+		}
+		const markdown = (data.contentMarkdown ?? "").trim();
+		if (markdown.length < MIN_USEFUL_CONTENT) return null;
+
+		const meta: string[] = [];
+		if (data.author) meta.push(`作者: ${data.author}`);
+		if (data.published) meta.push(`发布: ${data.published.slice(0, 10)}`);
+		if (data.wordCount) meta.push(`字数: ${data.wordCount}`);
+
+		const lines: string[] = [];
+		if (data.title) lines.push(`# ${data.title}`, "");
+		if (meta.length) lines.push(`> ${meta.join(" · ")}`, "");
+		if (data.description) lines.push(`> ${data.description}`, "");
+		if (data.title || meta.length || data.description) lines.push("---", "");
+		lines.push(markdown);
+
+		return {
+			url,
+			title: data.title ?? "",
+			content: lines.join("\n"),
+			error: null,
+		};
+	} catch {
+		return null;
+	}
+}
+
+// ── Playwright Fallback (persistent profile) ─────────────────────────
+// Last-resort fallback for pages that block all anonymous server-side fetches
+// (zhihu, weibo, xhs etc.). Launches headless Chromium with a persistent
+// user-data-dir so cookies/login state survive across calls.
+//
+// First-time setup for a new site: run tools/login_bootstrap.ts <url>,
+// log in manually, close. After that pi-wf can reuse the cookies.
+//
+// Disabled by default unless PI_WF_PLAYWRIGHT=1 (Playwright is an optional
+// peerDep and Chromium startup adds ~2s).
+
+const PLAYWRIGHT_TIMEOUT_MS = 30000;
+const PLAYWRIGHT_SETTLE_MS = 1500;
+const PLAYWRIGHT_PROFILE_DIR =
+	process.env.PI_WF_PROFILE ??
+	`${process.env.HOME ?? ""}/.pw-capture-profile`;
+
+// Minimal stealth init script — patches the headless tells that anti-bot
+// scripts check first (navigator.webdriver, window.chrome, userAgentData,
+// platform). Adapted from tiktok_clawler/config.py. Injected via
+// `addInitScript` so it runs in every frame before page scripts. Heavier
+// alternatives (puppeteer-extra-plugin-stealth.min.js, ~180 KB) exist but
+// this 20-line version is enough for most CN sites.
+const STEALTH_SCRIPT = `
+  delete navigator.__proto__.webdriver;
+  window.chrome = { runtime: {} };
+  Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+  Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+  if (!navigator.userAgentData) {
+    Object.defineProperty(navigator, 'userAgentData', {
+      value: {
+        brands: [
+          { brand: "Chromium", version: "122" },
+          { brand: "Google Chrome", version: "122" },
+          { brand: "Not:A-Brand", version: "24" }
+        ],
+        mobile: false,
+        platform: "macOS",
+        getHighEntropyValues: async () => ({
+          architecture: "arm", model: "", platform: "macOS",
+          platformVersion: "14.0.0", uaFullVersion: "122.0.0.0"
+        })
+      },
+      writable: false, configurable: false
+    });
+  }
+  // WebGL vendor/renderer spoof — many headless checks call this.
+  const _getParameter = WebGLRenderingContext.prototype.getParameter;
+  WebGLRenderingContext.prototype.getParameter = function (p) {
+    if (p === 37445) return 'Intel Inc.';            // UNMASKED_VENDOR_WEBGL
+    if (p === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
+    return _getParameter.call(this, p);
+  };
+  // Permissions API: report 'prompt' instead of 'denied' for notifications.
+  const _query = navigator.permissions && navigator.permissions.query;
+  if (_query) {
+    navigator.permissions.query = (p) =>
+      p && p.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : _query.call(navigator.permissions, p);
+  }
+`;
+
+type PWModule = typeof import("playwright");
+let pwModule: PWModule | null | undefined;
+
+// Hosts that always block anonymous server-side fetches — we auto-enable the
+// Playwright fallback for these without requiring PI_WF_PLAYWRIGHT=1. The user
+// still has to do a one-time `pi-wf --login <url>` to seed cookies.
+const PLAYWRIGHT_AUTO_HOSTS = /(?:^|\.)(zhihu|weibo|xiaohongshu)\.com$/i;
+
+function playwrightWantedFor(url: string): boolean {
+	if (process.env.PI_WF_PLAYWRIGHT === "0") return false;
+	if (process.env.PI_WF_PLAYWRIGHT === "1") return true;
+	try {
+		return PLAYWRIGHT_AUTO_HOSTS.test(new URL(url).hostname);
+	} catch {
+		return false;
+	}
+}
+
+async function loadPlaywright(): Promise<PWModule | null> {
+	if (pwModule !== undefined) return pwModule;
+	try {
+		pwModule = (await import("playwright")) as PWModule;
+	} catch {
+		pwModule = null;
+	}
+	return pwModule;
+}
+
+async function extractWithPlaywright(
+	url: string,
+	signal?: AbortSignal,
+): Promise<FetchResult | null> {
+	if (!playwrightWantedFor(url)) return null;
+	const pw = await loadPlaywright();
+	if (!pw) return null;
+
+	const ctx = await pw.chromium.launchPersistentContext(PLAYWRIGHT_PROFILE_DIR, {
+		headless: true,
+		userAgent: USER_AGENT,
+		viewport: { width: 1280, height: 800 },
+		locale: "zh-CN",
+		args: [
+			"--disable-blink-features=AutomationControlled",
+			"--disable-dev-shm-usage",
+			"--no-sandbox",
+		],
+	});
+	await ctx.addInitScript(STEALTH_SCRIPT);
+
+	let html: string | null = null;
+	try {
+		const page = await ctx.newPage();
+		const onAbort = () => page.close().catch(() => {});
+		signal?.addEventListener("abort", onAbort);
+		try {
+			await page
+				.goto(url, { waitUntil: "domcontentloaded", timeout: PLAYWRIGHT_TIMEOUT_MS })
+				.catch(() => {}); // some SPAs never fire DOMContentLoaded — keep going
+			await page.waitForTimeout(PLAYWRIGHT_SETTLE_MS);
+			html = await page.content();
+		} finally {
+			signal?.removeEventListener("abort", onAbort);
+		}
+	} catch {
+		html = null;
+	} finally {
+		await ctx.close().catch(() => {});
+	}
+
+	if (!html) return null;
+
+	// Bail early if it's the obvious anti-bot wall — don't return "安全验证"
+	// as the title.
+	if (/安全验证|请您登录|please log\s*in|captcha required/i.test(html.slice(0, 2000))) {
+		return null;
+	}
+
+	const { document } = parseHTML(html);
+	const reader = new Readability(document as unknown as Document);
+	const article = reader.parse();
+	if (!article) return null;
+
+	const markdown = turndown.turndown(article.content).trim();
+	if (markdown.length < MIN_USEFUL_CONTENT) return null;
+	return {
+		url,
+		title: article.title || "",
+		content: markdown,
+		error: null,
+	};
+}
+
 // ── Jina Reader Fallback ─────────────────────────────────────────────
 
 async function extractWithJinaReader(
@@ -534,8 +772,18 @@ export async function fetchAndExtract(
 		return httpResult;
 	}
 
+	const defuddleResult = await extractWithDefuddle(url, signal);
+	if (defuddleResult) return defuddleResult;
+	if (signal?.aborted)
+		return { url, title: "", content: "", error: "Aborted" };
+
 	const jinaResult = await extractWithJinaReader(url, signal);
 	if (jinaResult) return jinaResult;
+	if (signal?.aborted)
+		return { url, title: "", content: "", error: "Aborted" };
+
+	const playwrightResult = await extractWithPlaywright(url, signal);
+	if (playwrightResult) return playwrightResult;
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
 

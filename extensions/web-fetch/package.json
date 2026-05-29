@@ -3,12 +3,21 @@
 	"private": true,
 	"type": "module",
 	"pi": {
-		"extensions": ["./index.ts"]
+		"extensions": ["./index.ts"],
+		"cli": [
+			{ "name": "pi-wf", "entry": "./dev.ts" }
+		]
 	},
 	"dependencies": {
 		"@mozilla/readability": "^0.5.0",
 		"linkedom": "^0.16.0",
 		"turndown": "^7.2.0",
 		"unpdf": "^1.4.0"
+	},
+	"peerDependencies": {
+		"playwright": "*"
+	},
+	"peerDependenciesMeta": {
+		"playwright": { "optional": true }
 	}
 }

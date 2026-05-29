@@ -1,7 +1,7 @@
 // backends/brave.ts
 
 import { createRequire } from "node:module";
-import type { Backend, SearchResult } from "./types";
+import type { Backend, SearchResult } from "./types.ts";
 
 type BraveResponse = {
   web?: {

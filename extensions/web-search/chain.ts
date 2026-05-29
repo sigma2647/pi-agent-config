@@ -1,7 +1,7 @@
 // chain.ts
 
-import type { Backend, BackendAttempt, SearchResult } from "./backends/types";
-import { filterRelevant } from "./validate";
+import type { Backend, BackendAttempt, SearchResult } from "./backends/types.ts";
+import { filterRelevant } from "./validate.ts";
 
 const REGISTRY = new Map<string, Backend>();
 

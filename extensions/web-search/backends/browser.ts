@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import type { Backend, SearchResult } from "./types";
+import type { Backend, SearchResult } from "./types.ts";
 
 async function which(cmd: string): Promise<boolean> {
   return await new Promise((resolve) => {
@@ -56,18 +56,43 @@ async function pickAvailable(): Promise<PickedBackend> {
 
 // ---------- browser-harness path ----------
 
+// We use Bing because:
+//   - html.duckduckgo.com/html/ now serves a "select all squares with a duck"
+//     CAPTCHA challenge to every fetch, even from a logged-in Chrome session;
+//   - search.brave.com also CAPTCHAs anonymous scrapes;
+//   - Bing's organic results page is permissive and its markup is stable.
+// Bing wraps every result href in `bing.com/ck/a?u=a1<urlsafe-b64>` for click
+// tracking; we decode the `u` param to recover the original destination.
 const HARNESS_SCRIPT = (query: string) => `
 import json, urllib.parse
 q = ${JSON.stringify(query)}
-u = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(q)
+u = "https://www.bing.com/search?q=" + urllib.parse.quote(q)
 new_tab(u)
 wait_for_load()
 items = js("""
-  Array.from(document.querySelectorAll('div.result, div.web-result')).slice(0, 10).map(el => {
-    const a = el.querySelector('a.result__a, a.result-title');
-    const s = el.querySelector('.result__snippet, .result-snippet');
-    return a ? { title: a.innerText.trim(), url: a.href, snippet: s ? s.innerText.trim() : '' } : null;
-  }).filter(Boolean)
+  (() => {
+    const decodeBingUrl = (href) => {
+      try {
+        const u = new URL(href);
+        const enc = u.searchParams.get('u');
+        if (enc && enc.startsWith('a1')) {
+          const raw = enc.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+          return atob(raw + '==='.slice((raw.length + 3) % 4));
+        }
+      } catch {}
+      return href;
+    };
+    return Array.from(document.querySelectorAll('li.b_algo')).slice(0, 10).map(el => {
+      const a = el.querySelector('h2 a');
+      const s = el.querySelector('.b_caption p, p.b_lineclamp4, .b_lineclamp3');
+      if (!a) return null;
+      return {
+        title: (a.textContent || '').trim(),
+        url: decodeBingUrl(a.href),
+        snippet: s ? (s.textContent || '').trim() : ''
+      };
+    }).filter(Boolean);
+  })()
 """)
 print("__RESULTS_JSON__" + json.dumps(items))
 `;
@@ -213,26 +238,38 @@ async function runPlaywright(
     signal.addEventListener("abort", onAbort, { once: true });
     try {
       await page.goto(
-        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+        `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
         { waitUntil: "domcontentloaded", timeout: 8000 },
       );
+      // Bing wraps each href in /ck/a?u=a1<urlsafe-b64>; decode to recover
+      // the real destination URL.
       const results: SearchResult[] = await page.$$eval(
-        "div.result, div.web-result",
-        (els: Element[]) =>
-          els.slice(0, 10).map((el) => {
-            const a = el.querySelector(
-              "a.result__a, a.result-title",
-            ) as HTMLAnchorElement | null;
+        "li.b_algo",
+        (els: Element[]) => {
+          const decodeBingUrl = (href: string): string => {
+            try {
+              const u = new URL(href);
+              const enc = u.searchParams.get("u");
+              if (enc && enc.startsWith("a1")) {
+                const raw = enc.slice(2).replace(/-/g, "+").replace(/_/g, "/");
+                return atob(raw + "===".slice((raw.length + 3) % 4));
+              }
+            } catch {}
+            return href;
+          };
+          return els.slice(0, 10).map((el) => {
+            const a = el.querySelector("h2 a") as HTMLAnchorElement | null;
             const s = el.querySelector(
-              ".result__snippet, .result-snippet",
+              ".b_caption p, p.b_lineclamp4, .b_lineclamp3",
             ) as HTMLElement | null;
             if (!a) return null;
             return {
-              title: (a.innerText || "").trim(),
-              url: a.href,
-              snippet: s ? (s.innerText || "").trim() : "",
+              title: (a.textContent || "").trim(),
+              url: decodeBingUrl(a.href),
+              snippet: s ? (s.textContent || "").trim() : "",
             };
-          }).filter(Boolean) as SearchResult[],
+          }).filter(Boolean) as SearchResult[];
+        },
       );
       return results.filter((r) => r && r.title && r.url);
     } finally {

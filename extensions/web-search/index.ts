@@ -21,11 +21,11 @@ import {
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 
-import { registerBackend, runChain, loadConfig } from "./chain";
-import { braveBackend } from "./backends/brave";
-import { opencliBackend } from "./backends/opencli";
-import { browserBackend } from "./backends/browser";
-import type { BackendAttempt, SearchResult } from "./backends/types";
+import { registerBackend, runChain, loadConfig } from "./chain.ts";
+import { braveBackend } from "./backends/brave.ts";
+import { opencliBackend } from "./backends/opencli.ts";
+import { browserBackend } from "./backends/browser.ts";
+import type { BackendAttempt, SearchResult } from "./backends/types.ts";
 
 registerBackend(braveBackend);
 registerBackend(opencliBackend);
@@ -40,6 +40,31 @@ function formatResults(backend: string, results: SearchResult[]): string {
     lines.push("");
   });
   return lines.join("\n");
+}
+
+// JSON variant for the pi-internal tool call path. Agents handle structured
+// JSON more reliably than markdown lists, and snippets often contain markdown
+// bytes that confuse downstream parsers. Human surfaces (CLI default, /search
+// command) stay on `formatResults()`.
+function formatResultsJson(backend: string, results: SearchResult[]): string {
+  return JSON.stringify({ ok: true, backend, count: results.length, results }, null, 2);
+}
+
+function formatFailureJson(query: string, attempts: BackendAttempt[]): string {
+  return JSON.stringify(
+    {
+      ok: false,
+      query,
+      attempts: attempts.map((a) => ({
+        name: a.name,
+        kind: a.status.kind,
+        reason: a.status.kind === "ok" ? undefined : a.status.reason,
+        elapsedMs: a.elapsedMs,
+      })),
+    },
+    null,
+    2,
+  );
 }
 
 function formatFailure(query: string, attempts: BackendAttempt[]): string {
@@ -131,11 +156,14 @@ export default function (pi: ExtensionAPI) {
         shortCircuit: params.mode === "instant",
       });
 
+      // pi tool path → JSON. The `details` field still carries the chain
+      // attempts in structured form; the text content is the agent-facing
+      // payload.
       let text: string;
       if (result.kind === "ok") {
-        text = formatResults(result.backend, result.results);
+        text = formatResultsJson(result.backend, result.results);
       } else {
-        text = formatFailure(params.query, result.attempts);
+        text = formatFailureJson(params.query, result.attempts);
       }
 
       const truncation = truncateHead(text, {

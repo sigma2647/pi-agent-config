@@ -1,6 +1,6 @@
 // validate.ts
 
-import type { SearchResult } from "./backends/types";
+import type { SearchResult } from "./backends/types.ts";
 
 const STOPWORDS = new Set([
   "a", "an", "the", "and", "or", "of", "in", "to", "for", "is", "on",
