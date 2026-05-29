@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types --no-warnings
+#!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings
 // Interactive login bootstrap for the pi-wf Playwright fallback.
 //
 // Opens a headed Chromium with the persistent profile at ~/.pw-capture-profile,
@@ -11,6 +11,7 @@
 //   ./tools/login_bootstrap.ts <url> # direct
 
 import readline from "node:readline";
+import { loadPlaywright, playwrightInstallHint } from "../playwright.ts";
 
 const UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -20,14 +21,13 @@ export async function runLoginBootstrap(url: string): Promise<void> {
 		process.env.PI_WF_PROFILE ??
 		`${process.env.HOME ?? ""}/.pw-capture-profile`;
 
-	let chromium: typeof import("playwright").chromium;
-	try {
-		({ chromium } = await import("playwright"));
-	} catch {
+	const pw = await loadPlaywright();
+	if (!pw) {
 		console.error("error: playwright is not installed.");
-		console.error("install with: npm i -g playwright && npx playwright install chromium");
+		console.error(playwrightInstallHint());
 		process.exit(1);
 	}
+	const { chromium } = pw;
 
 	console.error(`profile: ${profileDir}`);
 	console.error(`opening ${url} in a Chrome window…`);

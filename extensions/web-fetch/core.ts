@@ -4,6 +4,7 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import { dispatchExtractor } from "./extractors/index.ts";
+import { loadPlaywright as resolvePlaywright } from "./playwright.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -474,9 +475,6 @@ const STEALTH_SCRIPT = `
   }
 `;
 
-type PWModule = typeof import("playwright");
-let pwModule: PWModule | null | undefined;
-
 // Hosts that always block anonymous server-side fetches — we auto-enable the
 // Playwright fallback for these without requiring PI_WF_PLAYWRIGHT=1. The user
 // still has to do a one-time `pi-wf --login <url>` to seed cookies.
@@ -492,15 +490,7 @@ function playwrightWantedFor(url: string): boolean {
 	}
 }
 
-async function loadPlaywright(): Promise<PWModule | null> {
-	if (pwModule !== undefined) return pwModule;
-	try {
-		pwModule = (await import("playwright")) as PWModule;
-	} catch {
-		pwModule = null;
-	}
-	return pwModule;
-}
+const loadPlaywright = resolvePlaywright;
 
 async function extractWithPlaywright(
 	url: string,
@@ -729,12 +719,44 @@ async function extractViaHttp(
 			error: null,
 		};
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { url, title: "", content: "", error: message };
+		return { url, title: "", content: "", error: describeNetworkError(err, url) };
 	} finally {
 		clearTimeout(timeoutId);
 		signal?.removeEventListener("abort", onAbort);
 	}
+}
+
+// Node's `fetch` collapses every network failure into a bare `TypeError: fetch
+// failed`. The useful info — TCP error code, host that refused, what kind of
+// timeout — sits on `err.cause`. Expose it and add ONE actionable next-step
+// based on the dominant cause; don't bury the user in advice.
+function describeNetworkError(err: unknown, url: string): string {
+	if (!(err instanceof Error)) return String(err);
+	if (err.name === "AbortError" || err.message === "Aborted") return "Aborted";
+	if (err.message !== "fetch failed") return err.message;
+
+	const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+	const code = cause?.code ?? "";
+	const proxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "";
+	let host = "";
+	try { host = new URL(url).hostname; } catch { /* malformed url, skip */ }
+
+	const head = code ? `fetch failed (${code})` : "fetch failed";
+	let hint = "";
+	if (code === "ECONNREFUSED") {
+		hint = proxy
+			? `proxy ${proxy} refused connection — is Clash/V2Ray running? bypass: HTTPS_PROXY= HTTP_PROXY= pi-wf <url>`
+			: `${host} refused the connection`;
+	} else if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") {
+		hint = proxy
+			? `connect timed out via ${proxy} — proxy reachable but upstream blocked or slow`
+			: `connect timed out — ${host} may be blocked; try setting HTTPS_PROXY=http://127.0.0.1:7890`;
+	} else if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+		hint = `DNS lookup failed for ${host}`;
+	} else if (code?.startsWith("CERT_") || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+		hint = `TLS certificate error — ${cause?.message ?? code}`;
+	}
+	return hint ? `${head}: ${hint}` : head;
 }
 
 // ── Public Fetch Function ────────────────────────────────────────────
@@ -767,8 +789,13 @@ export async function fetchAndExtract(
 
 	if (
 		httpResult.error.startsWith("Unsupported content type") ||
-		httpResult.error.startsWith("Response too large")
+		httpResult.error.startsWith("Response too large") ||
+		httpResult.error.startsWith("fetch failed")
 	) {
+		// Network-level failures are a dead end — extra fallbacks (defuddle,
+		// Jina, playwright) all hit the same wall. Return the diagnostic
+		// error from describeNetworkError without the misleading "may be
+		// JS-rendered or login-gated" suffix.
 		return httpResult;
 	}
 
@@ -787,8 +814,26 @@ export async function fetchAndExtract(
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
 
+	const hints = [
+		"The page may be JavaScript-rendered or login-gated. Try:",
+		"  • A different URL for the same content",
+		"  • web_search to find cached/alternative versions",
+	];
+	const needsLogin = PLAYWRIGHT_AUTO_HOSTS.test(parsedUrl.hostname);
+	const isAuthError = /HTTP (401|403|429)\b/.test(httpResult.error);
+	if (needsLogin) {
+		hints.push(
+			`  • This host blocks anonymous requests — seed cookies once:`,
+			`      pi-wf --login ${parsedUrl.origin}`,
+		);
+	} else if (isAuthError) {
+		hints.push(
+			`  • If the page requires sign-in, seed cookies once via:`,
+			`      pi-wf --login ${parsedUrl.origin}`,
+		);
+	}
 	return {
 		...httpResult,
-		error: `${httpResult.error}\n\nThe page may be JavaScript-rendered. Try:\n  • A different URL for the same content\n  • web_search to find cached/alternative versions`,
+		error: `${httpResult.error}\n\n${hints.join("\n")}`,
 	};
 }

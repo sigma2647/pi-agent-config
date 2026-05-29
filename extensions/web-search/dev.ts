@@ -1,4 +1,4 @@
-#!/usr/bin/env -S node --experimental-strip-types --no-warnings
+#!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings
 import { registerBackend, runChain, loadConfig, listBackends } from "./chain.ts";
 import { braveBackend } from "./backends/brave.ts";
 import { opencliBackend } from "./backends/opencli.ts";

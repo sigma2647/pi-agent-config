@@ -106,4 +106,25 @@ export default function (pi: ExtensionAPI) {
 			return text;
 		},
 	});
+
+	pi.registerCommand("web-fetch", {
+		description: "Fetch a URL and extract markdown (e.g. /web-fetch https://...)",
+		handler: async (args, ctx) => {
+			const url = args?.trim();
+			if (!url) {
+				ctx.ui.notify("Usage: /web-fetch <url>", "warning");
+				return;
+			}
+			const signal = ctx.signal ?? new AbortController().signal;
+			const result = await fetchAndExtract(url, signal);
+			if (result.error) {
+				ctx.ui.notify(`ERROR: ${result.error}`, "error");
+				return;
+			}
+			const header = result.title
+				? `# ${result.title}\n\nSource: ${result.url}\n\n---\n\n`
+				: "";
+			ctx.ui.notify(header + result.content, "info");
+		},
+	});
 }
