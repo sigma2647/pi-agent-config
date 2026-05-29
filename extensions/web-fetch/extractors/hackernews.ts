@@ -45,10 +45,10 @@ export const hackernewsExtractor: Extractor = {
 	match: (url) =>
 		(url.hostname === "news.ycombinator.com" || url.hostname === "hn.algolia.com") &&
 		!!url.searchParams.get("id"),
-	async extract(url, signal) {
+	async extract(ctx, url) {
 		const id = url.searchParams.get("id");
 		if (!id) return null;
-		const item = await fetchJson<HnItem>(`https://hn.algolia.com/api/v1/items/${id}`, signal);
+		const item = await fetchJson<HnItem>(ctx, `https://hn.algolia.com/api/v1/items/${id}`);
 		if (!item) return null;
 
 		const title = item.title || `HN item ${id}`;

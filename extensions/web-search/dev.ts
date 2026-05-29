@@ -17,6 +17,9 @@ const USAGE = `usage:
   pi-ws --format json|human ...  same idea, explicit form
   pi-ws --instant <query>        return first available backend's results
   pi-ws --chain a,b <query>      override fallback chain for this call
+  pi-ws --proxy <url> <query>    per-call proxy override (e.g. --proxy http://127.0.0.1:7890)
+                                 honored by brave; opencli inherits env;
+                                 browser (CDP) ignores per-call override.
   pi-ws --list                   list registered backends + effective chain
   pi-ws --json <query>           alias for --format json (kept for muscle memory)
 env:
@@ -49,6 +52,7 @@ function dieFlagNeedsArg(flag: string, hint: string): never {
 
 let mode: "full" | "instant" = "full";
 let chain: string[] | undefined;
+let proxy: string | undefined;
 // Default: JSON. Override via --human / --format human or PI_WS_FORMAT=human.
 const envFmt = (process.env.PI_WS_FORMAT ?? "").toLowerCase();
 let format: "json" | "human" = envFmt === "human" ? "human" : "json";
@@ -64,6 +68,17 @@ for (let i = 0; i < args.length; i++) {
 			dieFlagNeedsArg("--format", `accepted values: json, human\nexample:\n  pi-ws --format json "your query"`);
 		}
 		format = next;
+		i++;
+	}
+	else if (a === "--proxy") {
+		// Reject `--proxy --debug <query>` — the next arg must be a real URL.
+		// Otherwise the flag is silently swallowed and the user gets a confusing
+		// downstream error (ProxyAgent throws on "--debug").
+		const next = args[i + 1];
+		if (next === undefined || next.startsWith("--")) {
+			dieFlagNeedsArg("--proxy", "example:\n  pi-ws --proxy http://127.0.0.1:7890 \"your query\"");
+		}
+		proxy = next;
 		i++;
 	}
 	else if (a === "--chain") {
@@ -115,6 +130,7 @@ process.on("SIGINT", () => ctrl.abort());
 const result = await runChain(query, ctrl.signal, {
 	chain,
 	shortCircuit: mode === "instant",
+	proxy,
 });
 
 if (format === "json") {

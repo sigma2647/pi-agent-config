@@ -1,4 +1,4 @@
-import type { FetchResult } from "../core.ts";
+import type { FetchContext, FetchResult } from "../core.ts";
 import type { Extractor } from "./types.ts";
 import { bilibiliExtractor } from "./bilibili.ts";
 import { githubExtractor } from "./github.ts";
@@ -31,19 +31,19 @@ export function registerExtractor(e: Extractor): void {
  * matched extractor that returns null or throws is also treated as a decline.
  */
 export async function dispatchExtractor(
-	url: URL,
-	signal?: AbortSignal,
+	ctx: FetchContext,
+	parsedUrl: URL,
 ): Promise<FetchResult | null> {
 	for (const e of EXTRACTORS) {
 		let matched = false;
 		try {
-			matched = e.match(url);
+			matched = e.match(parsedUrl);
 		} catch {
 			matched = false;
 		}
 		if (!matched) continue;
 		try {
-			const result = await e.extract(url, signal);
+			const result = await e.extract(ctx, parsedUrl);
 			if (result && !result.error && result.content.trim().length > 0) {
 				return result;
 			}

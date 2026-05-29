@@ -1,6 +1,6 @@
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
-import type { FetchResult } from "../core.ts";
+import type { FetchContext, FetchResult } from "../core.ts";
 import { type Extractor, fetchText } from "./types.ts";
 
 // 微信公众号文章 (mp.weixin.qq.com/s/...) 把正文容器写成
@@ -53,10 +53,10 @@ function safeDate(unixSec: string | null): string {
 }
 
 async function extractWechat(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
-	const html = await fetchText(url.href, signal);
+	const html = await fetchText(ctx, url.href);
 	if (!html) return null;
 
 	// 微信偶尔会跳到"环境异常"反爬页面，那种页面没有 js_content。

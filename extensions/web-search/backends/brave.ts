@@ -100,11 +100,14 @@ async function loadUndici(): Promise<UndiciExports | null> {
   return null;
 }
 
-async function getProxyFetch(): Promise<{
+async function getProxyFetch(override?: string): Promise<{
   fetchFn: typeof fetch;
   dispatcher: unknown | undefined;
 }> {
-  const url = getProxyUrl();
+  // Precedence: explicit `override` (per-call --proxy or tool param) →
+  // env-based getProxyUrl() → DEFAULT_PROXY. `override === ""` is an
+  // explicit per-call disable, distinct from `undefined` (no override).
+  const url = override !== undefined ? (override || undefined) : getProxyUrl();
   if (!url) return { fetchFn: fetch, dispatcher: undefined };
   if (cachedDispatcher && cachedDispatcher.url === url) {
     return {
@@ -130,7 +133,7 @@ export const braveBackend: Backend = {
     return !!process.env.BRAVE_SEARCH_API_KEY;
   },
 
-  async search(query, signal) {
+  async search(query, signal, opts) {
     const key = process.env.BRAVE_SEARCH_API_KEY;
     if (!key) throw new Error("BRAVE_SEARCH_API_KEY not set");
 
@@ -138,7 +141,7 @@ export const braveBackend: Backend = {
       `https://api.search.brave.com/res/v1/web/search` +
       `?q=${encodeURIComponent(query)}&count=10`;
 
-    const { fetchFn, dispatcher } = await getProxyFetch();
+    const { fetchFn, dispatcher } = await getProxyFetch(opts?.proxy);
     const init: RequestInit & { dispatcher?: unknown } = {
       signal,
       headers: {

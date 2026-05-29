@@ -21,11 +21,21 @@ import {
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 
-import { registerBackend, runChain, loadConfig } from "./chain.ts";
+import { registerBackend, runChain, loadConfig, listBackends } from "./chain.ts";
 import { braveBackend } from "./backends/brave.ts";
 import { opencliBackend } from "./backends/opencli.ts";
 import { browserBackend } from "./backends/browser.ts";
 import type { BackendAttempt, SearchResult } from "./backends/types.ts";
+
+// Re-exports for third-party extensions that want to register additional
+// backends without reaching into internal paths. A separate extension can
+// `import { registerBackend } from "pi-web-search"` (or relative-import this
+// module) and call `registerBackend({...})` from its own `default` entry
+// point — the new backend then joins the existing fallback chain and can be
+// selected via `PI_WEB_SEARCH_CHAIN` or `--chain`. Keeping this surface
+// small and stable; do NOT re-export internal validation / filter helpers.
+export { registerBackend, listBackends };
+export type { Backend, SearchOptions, SearchResult, BackendAttempt } from "./backends/types.ts";
 
 registerBackend(braveBackend);
 registerBackend(opencliBackend);
@@ -121,6 +131,12 @@ export default function (pi: ExtensionAPI) {
             "Optional override of the fallback chain (e.g. ['opencli','brave']). Unknown names are silently dropped.",
         }),
       ),
+      proxy: Type.Optional(
+        Type.String({
+          description:
+            "Optional per-call proxy URL (e.g. http://127.0.0.1:7890). Honored by the brave backend; opencli inherits env; browser (CDP) ignores per-call override.",
+        }),
+      ),
     }),
     prepareArguments(args) {
       if (!args || typeof args !== "object") return args;
@@ -129,6 +145,7 @@ export default function (pi: ExtensionAPI) {
         mode?: string;
         q?: string;
         chain?: string[];
+        proxy?: string;
       };
       if (!input.query && input.q) {
         return { ...input, query: input.q };
@@ -154,6 +171,7 @@ export default function (pi: ExtensionAPI) {
       const result = await runChain(params.query, effectiveSignal, {
         chain: params.chain,
         shortCircuit: params.mode === "instant",
+        proxy: params.proxy,
       });
 
       // pi tool path → JSON. The `details` field still carries the chain

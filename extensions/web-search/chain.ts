@@ -72,7 +72,7 @@ export type ChainResult =
 export async function runChain(
   query: string,
   parentSignal: AbortSignal,
-  opts?: { chain?: string[]; shortCircuit?: boolean },
+  opts?: { chain?: string[]; shortCircuit?: boolean; proxy?: string },
 ): Promise<ChainResult> {
   const cfg = loadConfig({ chain: opts?.chain });
   const attempts: BackendAttempt[] = [];
@@ -114,7 +114,7 @@ export async function runChain(
       );
 
       try {
-        const raw = await backend.search(query, perCtl.signal);
+        const raw = await backend.search(query, perCtl.signal, { proxy: opts?.proxy });
         const filtered = filterRelevant(query, raw);
         const elapsedMs = Date.now() - t0;
 

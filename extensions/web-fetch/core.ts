@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
+import { ProxyAgent } from "undici";
 import { dispatchExtractor } from "./extractors/index.ts";
 import { loadPlaywright as resolvePlaywright } from "./playwright.ts";
 
@@ -12,6 +13,57 @@ const MAX_PDF_SIZE = 20 * 1024 * 1024;
 const MIN_USEFUL_CONTENT = 500;
 const JINA_READER_BASE = "https://r.jina.ai/";
 const JINA_TIMEOUT_MS = 30000;
+
+// ── Fetch execution context ───────────────────────────────────────────
+// Every fetch helper, every extractor, every diagnostic function takes a
+// FetchContext instead of `(url, signal, proxy?, ...)`. Adding a new
+// per-request option (timeout, userAgent, custom headers, ...) is a
+// one-line change to this interface plus the makeContext builder; no
+// signatures down the chain need to move. The dispatcher is built once
+// when the ctx is created and reused across the whole fallback chain.
+
+export interface FetchContext {
+	/** The page URL being fetched. */
+	url: string;
+	/** Caller-supplied cancellation signal. */
+	signal?: AbortSignal;
+	/** Explicit proxy URL (overrides env). Falls back to env when absent. */
+	proxy?: string;
+	/**
+	 * Pre-built undici dispatcher. `undefined` means "use undici default"
+	 * which respects EnvHttpProxyAgent (i.e. `HTTP_PROXY` / `HTTPS_PROXY`).
+	 */
+	dispatcher?: import("undici").Dispatcher;
+}
+
+/** Build a `ProxyAgent` once for the given explicit proxy URL. */
+function makeDispatcher(proxy?: string): import("undici").Dispatcher | undefined {
+	if (!proxy) return undefined;
+	try {
+		return new ProxyAgent(proxy);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Build a FetchContext with the dispatcher cached. Call once per fetchAndExtract. */
+export function makeContext(
+	url: string,
+	signal?: AbortSignal,
+	opts?: { proxy?: string },
+): FetchContext {
+	return {
+		url,
+		signal,
+		proxy: opts?.proxy,
+		dispatcher: makeDispatcher(opts?.proxy),
+	};
+}
+
+/** Resolved proxy URL for display / error messages / Chromium config. */
+export function effectiveProxy(ctx: FetchContext): string {
+	return ctx.proxy ?? process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "";
+}
 
 const turndown = new TurndownService({
 	headingStyle: "atx",
@@ -426,29 +478,28 @@ async function loadDefuddle(): Promise<DefuddleFn | null> {
 }
 
 async function extractWithDefuddle(
-	url: string,
-	signal?: AbortSignal,
+	ctx: FetchContext,
 	prefetchedHtml?: string,
 ): Promise<FetchResult | null> {
 	const Defuddle = await loadDefuddle();
 	if (!Defuddle) return null;
 	try {
 		// Reuse HTML if extractViaHttp already fetched it (--defuddle path
-		// passes it through); otherwise fetch ourselves. Node's `fetch` honors
-		// NODE_USE_ENV_PROXY=1 via the dev.ts shebang.
+		// passes it through); otherwise fetch ourselves using ctx's dispatcher.
 		let html = prefetchedHtml;
 		if (!html) {
-			const res = await fetch(url, {
-				signal,
+			const res = await fetch(ctx.url, {
+				signal: ctx.signal,
+				dispatcher: ctx.dispatcher,
 				headers: { "User-Agent": USER_AGENT },
 			});
 			if (!res.ok) return null;
 			html = await res.text();
 		}
-		if (signal?.aborted) return null;
+		if (ctx.signal?.aborted) return null;
 
 		const { document } = parseHTML(html);
-		const r = await Defuddle(document, url, { markdown: true });
+		const r = await Defuddle(document, ctx.url, { markdown: true });
 		const markdown = (r.content ?? "").trim();
 		if (markdown.length < MIN_USEFUL_CONTENT) return null;
 
@@ -467,7 +518,7 @@ async function extractWithDefuddle(
 		lines.push(markdown);
 
 		return {
-			url,
+			url: ctx.url,
 			title: r.title ?? "",
 			content: lines.join("\n"),
 			error: null,
@@ -558,44 +609,50 @@ function playwrightWantedFor(url: string): boolean {
 const loadPlaywright = resolvePlaywright;
 
 async function extractWithPlaywright(
-	url: string,
-	signal?: AbortSignal,
+	ctx: FetchContext,
 ): Promise<FetchResult | null> {
-	if (!playwrightWantedFor(url)) return null;
+	if (!playwrightWantedFor(ctx.url)) return null;
 	const pw = await loadPlaywright();
 	if (!pw) return null;
 
-	const ctx = await pw.chromium.launchPersistentContext(PLAYWRIGHT_PROFILE_DIR, {
+	// Chromium is a separate process — it does NOT honor `NODE_USE_ENV_PROXY`
+	// or the undici dispatcher. The only way to route Chromium through a proxy
+	// is the `proxy` launch option. We mirror the env-or-explicit precedence
+	// used by every other extractor via effectiveProxy().
+	const proxy = effectiveProxy(ctx);
+
+	const browser = await pw.chromium.launchPersistentContext(PLAYWRIGHT_PROFILE_DIR, {
 		headless: true,
 		userAgent: USER_AGENT,
 		viewport: { width: 1280, height: 800 },
 		locale: "zh-CN",
+		proxy: proxy ? { server: proxy } : undefined,
 		args: [
 			"--disable-blink-features=AutomationControlled",
 			"--disable-dev-shm-usage",
 			"--no-sandbox",
 		],
 	});
-	await ctx.addInitScript(STEALTH_SCRIPT);
+	await browser.addInitScript(STEALTH_SCRIPT);
 
 	let html: string | null = null;
 	try {
-		const page = await ctx.newPage();
+		const page = await browser.newPage();
 		const onAbort = () => page.close().catch(() => {});
-		signal?.addEventListener("abort", onAbort);
+		ctx.signal?.addEventListener("abort", onAbort);
 		try {
 			await page
-				.goto(url, { waitUntil: "domcontentloaded", timeout: PLAYWRIGHT_TIMEOUT_MS })
+				.goto(ctx.url, { waitUntil: "domcontentloaded", timeout: PLAYWRIGHT_TIMEOUT_MS })
 				.catch(() => {}); // some SPAs never fire DOMContentLoaded — keep going
 			await page.waitForTimeout(PLAYWRIGHT_SETTLE_MS);
 			html = await page.content();
 		} finally {
-			signal?.removeEventListener("abort", onAbort);
+			ctx.signal?.removeEventListener("abort", onAbort);
 		}
 	} catch {
 		html = null;
 	} finally {
-		await ctx.close().catch(() => {});
+		await browser.close().catch(() => {});
 	}
 
 	if (!html) return null;
@@ -611,10 +668,10 @@ async function extractWithPlaywright(
 	const article = reader.parse();
 	if (!article) return null;
 
-	const markdown = postProcessMarkdown(turndown.turndown(article.content), url);
+	const markdown = postProcessMarkdown(turndown.turndown(article.content), ctx.url);
 	if (markdown.length < MIN_USEFUL_CONTENT) return null;
 	return {
-		url,
+		url: ctx.url,
 		title: article.title || "",
 		content: markdown,
 		error: null,
@@ -624,15 +681,15 @@ async function extractWithPlaywright(
 // ── Jina Reader Fallback ─────────────────────────────────────────────
 
 async function extractWithJinaReader(
-	url: string,
-	signal?: AbortSignal,
+	ctx: FetchContext,
 ): Promise<FetchResult | null> {
 	try {
-		const res = await fetch(JINA_READER_BASE + url, {
+		const res = await fetch(JINA_READER_BASE + ctx.url, {
 			headers: { Accept: "text/markdown", "X-No-Cache": "true" },
+			dispatcher: ctx.dispatcher,
 			signal: AbortSignal.any([
 				AbortSignal.timeout(JINA_TIMEOUT_MS),
-				...(signal ? [signal] : []),
+				...(ctx.signal ? [ctx.signal] : []),
 			]),
 		});
 		if (!res.ok) return null;
@@ -652,9 +709,9 @@ async function extractWithJinaReader(
 
 		const title =
 			extractHeadingTitle(markdownPart) ??
-			new URL(url).pathname.split("/").pop() ??
-			url;
-		return { url, title, content: markdownPart, error: null };
+			new URL(ctx.url).pathname.split("/").pop() ??
+			ctx.url;
+		return { url: ctx.url, title, content: markdownPart, error: null };
 	} catch {
 		return null;
 	}
@@ -662,10 +719,10 @@ async function extractWithJinaReader(
 
 // ── Main HTTP Extraction ─────────────────────────────────────────────
 
-async function extractViaHttp(
-	url: string,
-	signal?: AbortSignal,
-): Promise<FetchResult> {
+async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
+	// Alias for readability — body still talks about `url` / `signal` which
+	// keeps the original logic clean. Only the signature changed.
+	const { url, signal } = ctx;
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 	const onAbort = () => controller.abort();
@@ -674,6 +731,7 @@ async function extractViaHttp(
 	try {
 		const response = await fetch(url, {
 			signal: controller.signal,
+			dispatcher: ctx.dispatcher,
 			headers: {
 				"User-Agent": USER_AGENT,
 				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -784,7 +842,7 @@ async function extractViaHttp(
 			error: null,
 		};
 	} catch (err) {
-		return { url, title: "", content: "", error: describeNetworkError(err, url) };
+		return { url, title: "", content: "", error: describeNetworkError(err, ctx) };
 	} finally {
 		clearTimeout(timeoutId);
 		signal?.removeEventListener("abort", onAbort);
@@ -795,16 +853,18 @@ async function extractViaHttp(
 // failed`. The useful info — TCP error code, host that refused, what kind of
 // timeout — sits on `err.cause`. Expose it and add ONE actionable next-step
 // based on the dominant cause; don't bury the user in advice.
-function describeNetworkError(err: unknown, url: string): string {
+function describeNetworkError(err: unknown, ctx: FetchContext): string {
 	if (!(err instanceof Error)) return String(err);
 	if (err.name === "AbortError" || err.message === "Aborted") return "Aborted";
 	if (err.message !== "fetch failed") return err.message;
 
 	const cause = (err as { cause?: { code?: string; message?: string } }).cause;
 	const code = cause?.code ?? "";
-	const proxy = process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "";
+	// Report the proxy actually in use (explicit `--proxy` wins over env), not
+	// just whatever env says — otherwise the hint misleads when --proxy is set.
+	const proxy = effectiveProxy(ctx);
 	let host = "";
-	try { host = new URL(url).hostname; } catch { /* malformed url, skip */ }
+	try { host = new URL(ctx.url).hostname; } catch { /* malformed url, skip */ }
 
 	const head = code ? `fetch failed (${code})` : "fetch failed";
 	let hint = "";
@@ -829,6 +889,7 @@ function describeNetworkError(err: unknown, url: string): string {
 export interface FetchOptions {
 	debug?: boolean;
 	preferDefuddle?: boolean;
+	proxy?: string;
 }
 
 export async function fetchAndExtract(
@@ -868,14 +929,21 @@ export async function fetchAndExtract(
 	} catch {
 		return { url, title: "", content: "", error: "Invalid URL" };
 	}
+
+	// Build the per-request context once. Every extractor / fetch helper /
+	// diagnostic function downstream takes this same ctx — adding a new
+	// per-call option (timeout, userAgent, ...) is a one-line edit to
+	// FetchContext + a line in makeContext, no signature changes downstream.
+	const ctx = makeContext(url, signal, { proxy: opts.proxy });
+
 	log(`url: ${url}`);
-	log(`host: ${parsedUrl.hostname}  proxy: ${process.env.HTTPS_PROXY ?? process.env.HTTP_PROXY ?? "(none)"}`);
+	log(`host: ${parsedUrl.hostname}  proxy: ${effectiveProxy(ctx) || "(none)"}`);
 	log(`mode: ${preferDefuddle ? "defuddle-primary" : "readability-primary"}`);
 
 	// Domain-specific extractors first (reddit/github/HN/…). On decline they
 	// return null and we fall through to the generic Readability/Jina pipeline.
 	const domainResult = await time("domain-extractor", () =>
-		dispatchExtractor(parsedUrl, signal),
+		dispatchExtractor(ctx, parsedUrl),
 	);
 	if (domainResult) {
 		log("→ returning: domain-extractor");
@@ -887,9 +955,7 @@ export async function fetchAndExtract(
 	// schema.org metadata, more complete section structure). Falls through to
 	// Readability if defuddle isn't installed / errors / returns too little.
 	if (preferDefuddle) {
-		const r = await time("defuddle (primary)", () =>
-			extractWithDefuddle(url, signal),
-		);
+		const r = await time("defuddle (primary)", () => extractWithDefuddle(ctx));
 		if (r) {
 			log("→ returning: defuddle (primary)");
 			return r;
@@ -898,9 +964,7 @@ export async function fetchAndExtract(
 		log("defuddle returned null — falling through to Readability");
 	}
 
-	const httpResult = await time("http+Readability", () =>
-		extractViaHttp(url, signal),
-	);
+	const httpResult = await time("http+Readability", () => extractViaHttp(ctx));
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
 	if (!httpResult.error) {
@@ -925,9 +989,7 @@ export async function fetchAndExtract(
 	// Skip the middle-chain defuddle if defuddle-primary already ran it once
 	// and it returned null. Would waste ~300ms re-doing the same work.
 	if (!preferDefuddle) {
-		const defuddleResult = await time("defuddle", () =>
-			extractWithDefuddle(url, signal),
-		);
+		const defuddleResult = await time("defuddle", () => extractWithDefuddle(ctx));
 		if (defuddleResult) {
 			log("→ returning: defuddle");
 			return defuddleResult;
@@ -938,9 +1000,7 @@ export async function fetchAndExtract(
 		log("defuddle (middle): skipped (already tried as forced)");
 	}
 
-	const jinaResult = await time("jina-reader", () =>
-		extractWithJinaReader(url, signal),
-	);
+	const jinaResult = await time("jina-reader", () => extractWithJinaReader(ctx));
 	if (jinaResult) {
 		log("→ returning: jina-reader");
 		return jinaResult;
@@ -948,9 +1008,7 @@ export async function fetchAndExtract(
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
 
-	const playwrightResult = await time("playwright", () =>
-		extractWithPlaywright(url, signal),
-	);
+	const playwrightResult = await time("playwright", () => extractWithPlaywright(ctx));
 	if (playwrightResult) {
 		log("→ returning: playwright");
 		return playwrightResult;

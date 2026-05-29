@@ -1,4 +1,4 @@
-import type { FetchResult } from "../core.ts";
+import type { FetchContext, FetchResult } from "../core.ts";
 import { type Extractor, fetchJson } from "./types.ts";
 
 // B站视频页面是 JS 重度渲染的，web_fetch 抓 HTML 无效。但 B站有公开 API
@@ -58,8 +58,8 @@ function safeDate(ts: number | undefined): string {
 }
 
 async function extractBilibili(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
 	const m = url.pathname.match(BILI_VIDEO_RE);
 	if (!m) return null;
@@ -68,7 +68,7 @@ async function extractBilibili(
 	const apiParam = id.startsWith("BV") ? `bvid=${id}` : `aid=${id.slice(2)}`;
 	const apiUrl = `https://api.bilibili.com/x/web-interface/view?${apiParam}`;
 
-	const info = await fetchJson<BiliVideoInfo>(apiUrl, signal);
+	const info = await fetchJson<BiliVideoInfo>(ctx, apiUrl);
 	if (!info || info.code !== 0 || !info.data) return null;
 
 	const d = info.data;

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { FetchResult } from "../core.ts";
+import type { FetchContext, FetchResult } from "../core.ts";
 import { type Extractor, fetchJson, fetchText } from "./types.ts";
 
 // Single GitHub extractor covering:
@@ -121,14 +121,14 @@ interface GhReadme {
 // ── Path-specific extractors ───────────────────────────────────────────
 
 async function extractBlob(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
 	const m = url.pathname.match(BLOB_RE);
 	if (!m) return null;
 	const [, owner, repo, ref, filePath] = m;
 	const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${filePath}`;
-	const text = await fetchText(rawUrl, signal);
+	const text = await fetchText(ctx, rawUrl);
 	if (text === null) return null;
 
 	const ext = filePath.includes(".") ? filePath.split(".").pop() : "";
@@ -143,14 +143,15 @@ async function extractBlob(
 }
 
 async function extractRepo(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
 	const m = url.pathname.match(REPO_RE);
 	if (!m) return null;
 	const [, owner, repo] = m;
 	if (RESERVED_TOP.has(owner.toLowerCase())) return null;
 	const fullName = `${owner}/${repo}`;
+	const signal = ctx.signal;
 
 	// Prefer gh CLI (uses user's auth → higher rate limit, private repos).
 	const ghView = await ghRun(["repo", "view", fullName], signal);
@@ -165,8 +166,8 @@ async function extractRepo(
 
 	// Fallback: anonymous REST API (60 req/h).
 	const repoData = await fetchJson<GhRepo>(
+		ctx,
 		`https://api.github.com/repos/${fullName}`,
-		signal,
 	);
 	if (!repoData) return null;
 
@@ -181,8 +182,8 @@ async function extractRepo(
 	lines.push("", "---", "");
 
 	const readme = await fetchJson<GhReadme>(
+		ctx,
 		`https://api.github.com/repos/${fullName}/readme`,
-		signal,
 	);
 	if (readme?.encoding === "base64" && readme.content) {
 		try {
@@ -203,8 +204,8 @@ async function extractRepo(
 }
 
 async function extractIssueOrPR(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
 	const isPR = PR_RE.test(url.pathname);
 	const m = url.pathname.match(isPR ? PR_RE : ISSUE_RE);
@@ -212,11 +213,12 @@ async function extractIssueOrPR(
 	const [, owner, repo, numStr] = m;
 	const fullName = `${owner}/${repo}`;
 	const num = parseInt(numStr, 10);
+	const signal = ctx.signal;
 
 	const endpoint = `repos/${fullName}/${isPR ? "pulls" : "issues"}/${num}`;
 	const data =
 		(await ghApi<GhIssue>(endpoint, signal)) ??
-		(await fetchJson<GhIssue>(`https://api.github.com/${endpoint}`, signal));
+		(await fetchJson<GhIssue>(ctx, `https://api.github.com/${endpoint}`));
 	if (!data) return null;
 
 	const lines: string[] = [
@@ -237,7 +239,7 @@ async function extractIssueOrPR(
 	const commentsEndpoint = `repos/${fullName}/issues/${num}/comments?per_page=20`;
 	const comments =
 		(await ghApi<GhComment[]>(commentsEndpoint, signal)) ??
-		(await fetchJson<GhComment[]>(`https://api.github.com/${commentsEndpoint}`, signal));
+		(await fetchJson<GhComment[]>(ctx, `https://api.github.com/${commentsEndpoint}`));
 	if (comments && comments.length > 0) {
 		lines.push("## Comments", "");
 		for (const c of comments) {
@@ -257,14 +259,14 @@ async function extractIssueOrPR(
 // ── Dispatcher ─────────────────────────────────────────────────────────
 
 async function extractGithub(
+	ctx: FetchContext,
 	url: URL,
-	signal?: AbortSignal,
 ): Promise<FetchResult | null> {
-	if (BLOB_RE.test(url.pathname)) return extractBlob(url, signal);
+	if (BLOB_RE.test(url.pathname)) return extractBlob(ctx, url);
 	if (ISSUE_RE.test(url.pathname) || PR_RE.test(url.pathname)) {
-		return extractIssueOrPR(url, signal);
+		return extractIssueOrPR(ctx, url);
 	}
-	if (REPO_RE.test(url.pathname)) return extractRepo(url, signal);
+	if (REPO_RE.test(url.pathname)) return extractRepo(ctx, url);
 	return null;
 }
 

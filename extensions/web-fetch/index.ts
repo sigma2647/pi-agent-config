@@ -14,10 +14,11 @@ export default function (pi: ExtensionAPI) {
 
 		parameters: Type.Object({
 			url: Type.String({ description: "URL to fetch" }),
+			proxy: Type.Optional(Type.String({ description: "Proxy URL (e.g. http://127.0.0.1:7890)" })),
 		}),
 
 		async execute(_toolCallId, params, signal) {
-			const result = await fetchAndExtract(params.url, signal);
+			const result = await fetchAndExtract(params.url, signal, { proxy: params.proxy });
 
 			if (result.error) {
 				throw new Error(`${params.url}: ${result.error}`);

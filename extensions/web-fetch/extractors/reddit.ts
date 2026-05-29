@@ -40,10 +40,10 @@ function renderComments(children: RedditThing[], depth: number, lines: string[],
 export const redditExtractor: Extractor = {
 	name: "reddit",
 	match: (url) => /(^|\.)reddit\.com$/.test(url.hostname),
-	async extract(url, signal) {
+	async extract(ctx, url) {
 		// Normalize old./www./np. → a .json endpoint on the canonical host.
 		const jsonUrl = `https://www.reddit.com${url.pathname.replace(/\/$/, "")}.json?limit=100&raw_json=1`;
-		const data = await fetchJson<any>(jsonUrl, signal);
+		const data = await fetchJson<any>(ctx, jsonUrl);
 		if (!Array.isArray(data) || data.length === 0) return null;
 
 		const postListing = data[0]?.data?.children?.[0]?.data;
