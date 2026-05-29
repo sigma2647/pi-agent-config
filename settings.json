@@ -1,6 +1,5 @@
 {
   "defaultThinkingLevel": "medium",
   "defaultProvider": "openrouter",
-  "defaultModel": "z-ai/glm-5.1",
-  "theme": "catppuccin-mocha"
+  "defaultModel": "z-ai/glm-5.1"
 }
