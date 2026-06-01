@@ -21,10 +21,7 @@ import {
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 
-import { registerBackend, runChain, loadConfig, listBackends } from "./chain.ts";
-import { braveBackend } from "./backends/brave.ts";
-import { opencliBackend } from "./backends/opencli.ts";
-import { browserBackend } from "./backends/browser.ts";
+import { registerBackend, registerDefaultBackends, runChain, loadConfig, listBackends } from "./chain.ts";
 import type { BackendAttempt, SearchResult } from "./backends/types.ts";
 
 // Re-exports for third-party extensions that want to register additional
@@ -37,9 +34,7 @@ import type { BackendAttempt, SearchResult } from "./backends/types.ts";
 export { registerBackend, listBackends };
 export type { Backend, SearchOptions, SearchResult, BackendAttempt } from "./backends/types.ts";
 
-registerBackend(braveBackend);
-registerBackend(opencliBackend);
-registerBackend(browserBackend);
+registerDefaultBackends();
 
 function formatResults(backend: string, results: SearchResult[]): string {
   const lines: string[] = [`[backend: ${backend}] (${results.length} results)`, ""];
@@ -112,11 +107,13 @@ export default function (pi: ExtensionAPI) {
     description:
       "Search the web via Brave → opencli → browser fallback chain. " +
       "Returns search results with titles, URLs, and snippets. " +
-      "Use this for current information, recent events, docs, and API references.",
+      "Use this for current information, recent events, docs, and API references. " +
+      "For site-scoped search (Bilibili/Zhihu/YouTube/etc.), prefer the site's opencli adapter (`opencli list`).",
     promptSnippet: "Search the web with backend fallback",
     promptGuidelines: [
       "Use web_search when the user asks about current events, recent information, or facts you are not confident about.",
       "Use web_search when you need to look up documentation, APIs, or technical references online.",
+      "web_search 走通用引擎。若目标是某个站点内的结构化搜索（B站视频、知乎、微博、YouTube、arXiv、BOSS直聘 等），通用引擎结果差——改用该站的 opencli adapter，经 Bash 调用，如 `opencli bilibili search \"<kw>\" -f json`。站点命令格式为 `opencli <site> <action>`，常见站点直接用；不确定某站是否支持时再 `opencli list | grep -i <site>`（list 全量 900+ 行会被截断，务必 grep）。",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
