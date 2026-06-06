@@ -8,9 +8,16 @@ export default function (pi: ExtensionAPI) {
 		name: "web_fetch",
 		label: "Web Fetch",
 		description:
-			"Fetch a web page and extract readable content as clean markdown. Uses Readability + Turndown for high-quality HTML→markdown conversion. Handles PDFs, plain text, and falls back to Jina Reader for JS-rendered pages.",
+			"Fetch a single URL and return the full page as clean markdown — the right tool whenever you need to READ a page (docs, blog post, GitHub issue, PDF, API reference, news article, RFC). " +
+			"Pairs with web_search: search finds URLs, fetch reads them. " +
+			"Handles HTML (Readability/Defuddle), PDFs, plain text, and JS-rendered pages via Jina/Playwright fallback.",
 		promptSnippet:
-			"Fetch a URL and extract readable content as markdown. Supports HTML pages, PDFs, and plain text.",
+			"Fetch a URL and extract its readable content as markdown.",
+		promptGuidelines: [
+			"Use web_fetch whenever you need the actual content of a known URL, including URLs returned by web_search.",
+			"Default to web_fetch over web_search when the user names a specific resource or gives a URL (e.g. 'check the React docs', 'read this RFC', 'open this PR', 'look at <url>').",
+			"After web_search returns useful-looking results, follow up with web_fetch on the top URL(s) instead of answering from snippets — snippets are previews, not source.",
+		],
 
 		parameters: Type.Object({
 			url: Type.String({ description: "URL to fetch" }),

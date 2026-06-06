@@ -111,12 +111,13 @@ export default function (pi: ExtensionAPI) {
     label: "Web Search",
     description:
       "Search the web via Brave → opencli → browser fallback chain. " +
-      "Returns search results with titles, URLs, and snippets. " +
-      "Use this for current information, recent events, docs, and API references.",
+      "Returns ranked URLs with titles and short snippets — NOT full page content. " +
+      "To read a result's full content, call web_fetch on its URL.",
     promptSnippet: "Search the web with backend fallback",
     promptGuidelines: [
-      "Use web_search when the user asks about current events, recent information, or facts you are not confident about.",
-      "Use web_search when you need to look up documentation, APIs, or technical references online.",
+      "Use web_search to DISCOVER URLs when you don't already know where the information lives.",
+      "Snippets returned are 1-2 sentence previews — treat them as link previews, NOT as the answer.",
+      "After web_search returns relevant URLs, follow up with web_fetch on the top result(s) to read the actual page. Only answer from snippets alone if the user merely needs a URL or a one-line confirmation.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
