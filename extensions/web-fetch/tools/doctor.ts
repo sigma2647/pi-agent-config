@@ -6,27 +6,10 @@
 // proxy port. Designed to answer "why doesn't fallback X kick in?" without
 // the user having to dig through CLAUDE.md.
 
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import { access, readdir } from "node:fs/promises";
 import { statSync } from "node:fs";
-import { connect } from "node:net";
 import { loadPlaywright } from "../playwright.ts";
-
-const execFileP = promisify(execFile);
-
-const OK = "\x1b[32m✓\x1b[0m";
-const BAD = "\x1b[31m✗\x1b[0m";
-const WARN = "\x1b[33m!\x1b[0m";
-
-async function which(cmd: string): Promise<string | null> {
-	try {
-		const { stdout } = await execFileP("which", [cmd]);
-		return stdout.trim() || null;
-	} catch {
-		return null;
-	}
-}
+import { OK, BAD, WARN, which, probeTcp } from "./cli-helpers.ts";
 
 async function probeDefuddleLib(): Promise<boolean> {
 	try {
@@ -35,25 +18,6 @@ async function probeDefuddleLib(): Promise<boolean> {
 	} catch {
 		return false;
 	}
-}
-
-async function probeTcp(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
-	return new Promise((resolve) => {
-		const sock = connect({ host, port });
-		const t = setTimeout(() => {
-			sock.destroy();
-			resolve(false);
-		}, timeoutMs);
-		sock.once("connect", () => {
-			clearTimeout(t);
-			sock.end();
-			resolve(true);
-		});
-		sock.once("error", () => {
-			clearTimeout(t);
-			resolve(false);
-		});
-	});
 }
 
 function parseProxy(url: string | undefined): { host: string; port: number } | null {
