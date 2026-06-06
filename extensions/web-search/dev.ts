@@ -17,6 +17,7 @@ const USAGE = `usage:
                                  browser (CDP) ignores per-call override.
   pi-ws --list                   list registered backends + effective chain
   pi-ws --doctor                 environment & backend self-check
+  pi-ws --smoke                  quick end-to-end self-check (2 cases, ~5s)
   pi-ws --json <query>           alias for --format json (kept for muscle memory)
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
@@ -36,6 +37,11 @@ if (args[0] === "--doctor") {
 	const { runDoctor } = await import("./tools/doctor.ts");
 	await runDoctor();
 	process.exit(0);
+}
+
+if (args[0] === "--smoke") {
+	const { runSmoke } = await import("./tools/smoke.ts");
+	process.exit(await runSmoke());
 }
 
 if (args[0] === "--list") {
