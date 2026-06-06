@@ -7,44 +7,8 @@
 // and the relevant env vars. Designed to answer "why does backend X get
 // skipped?" without digging through AGENTS.md.
 
-import { spawn } from "node:child_process";
-import { connect } from "node:net";
 import { loadConfig, listBackends, registerDefaultBackends } from "../chain.ts";
-
-const OK = "\x1b[32m✓\x1b[0m";
-const BAD = "\x1b[31m✗\x1b[0m";
-const WARN = "\x1b[33m!\x1b[0m";
-
-function which(cmd: string): Promise<string | null> {
-	return new Promise((resolve) => {
-		const p = spawn("sh", ["-c", `command -v ${cmd}`], {
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		let out = "";
-		p.stdout.on("data", (b: Buffer) => (out += b.toString()));
-		p.once("exit", (code) => resolve(code === 0 ? out.trim() || cmd : null));
-		p.once("error", () => resolve(null));
-	});
-}
-
-function probeTcp(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
-	return new Promise((resolve) => {
-		const sock = connect({ host, port });
-		const t = setTimeout(() => {
-			sock.destroy();
-			resolve(false);
-		}, timeoutMs);
-		sock.once("connect", () => {
-			clearTimeout(t);
-			sock.end();
-			resolve(true);
-		});
-		sock.once("error", () => {
-			clearTimeout(t);
-			resolve(false);
-		});
-	});
-}
+import { OK, BAD, WARN, which, probeTcp } from "./cli-helpers.ts";
 
 function parseHostPort(url: string | undefined): { host: string; port: number } | null {
 	if (!url) return null;
