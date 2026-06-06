@@ -16,8 +16,33 @@ function getCdpUrl(): string {
   return process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
 }
 
+// CDP is always a local debugging endpoint, so it must never be routed through
+// HTTP(S)_PROXY. With NODE_USE_ENV_PROXY=1 (our shebang) undici otherwise sends
+// `http://127.0.0.1:9222` straight into Clash, which drops it ("other side
+// closed") — making the whole playwright/CDP path dead whenever a proxy is set.
+// undici re-reads NO_PROXY per request, so appending the CDP host (idempotent)
+// is enough. Cheaper + more robust than a no-proxy dispatcher, which would need
+// brave.ts's undici-resolution dance and can throw UND_ERR_INVALID_ARG across
+// undici instances.
+function ensureCdpNoProxy(): void {
+  let host = "127.0.0.1";
+  try {
+    host = new URL(getCdpUrl()).hostname;
+  } catch {
+    /* keep default */
+  }
+  for (const key of ["NO_PROXY", "no_proxy"]) {
+    const cur = (process.env[key] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    for (const h of [host, "127.0.0.1", "localhost"]) {
+      if (!cur.includes(h)) cur.push(h);
+    }
+    process.env[key] = cur.join(",");
+  }
+}
+
 async function isCdpReachable(signal?: AbortSignal): Promise<boolean> {
   const base = getCdpUrl();
+  ensureCdpNoProxy();
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 1000);
   const fwd = () => ctl.abort();
@@ -215,6 +240,7 @@ async function resolveWsEndpoint(): Promise<string> {
   // playwright's HTTP probe of /json/version appends an extra trailing slash
   // that some Chromium builds reject with 400. Resolve the ws URL ourselves
   // and hand it directly to connectOverCDP.
+  ensureCdpNoProxy();
   const r = await fetch(`${getCdpUrl()}/json/version`);
   if (!r.ok) throw new Error(`CDP /json/version returned ${r.status}`);
   const data = (await r.json()) as { webSocketDebuggerUrl?: string };

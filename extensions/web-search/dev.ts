@@ -1,12 +1,7 @@
 #!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings
-import { registerBackend, runChain, loadConfig, listBackends } from "./chain.ts";
-import { braveBackend } from "./backends/brave.ts";
-import { opencliBackend } from "./backends/opencli.ts";
-import { browserBackend } from "./backends/browser.ts";
+import { registerDefaultBackends, runChain, loadConfig, listBackends } from "./chain.ts";
 
-registerBackend(braveBackend);
-registerBackend(opencliBackend);
-registerBackend(browserBackend);
+registerDefaultBackends();
 
 const USAGE = `usage:
   pi-ws <query>                  full chain (brave → opencli → browser)
@@ -21,6 +16,7 @@ const USAGE = `usage:
                                  honored by brave; opencli inherits env;
                                  browser (CDP) ignores per-call override.
   pi-ws --list                   list registered backends + effective chain
+  pi-ws --doctor                 environment & backend self-check
   pi-ws --json <query>           alias for --format json (kept for muscle memory)
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
@@ -34,6 +30,12 @@ const args = process.argv.slice(2);
 if (args.length === 0 || args[0] === "-h" || args[0] === "--help") {
 	process.stderr.write(USAGE);
 	process.exit(args.length === 0 ? 1 : 0);
+}
+
+if (args[0] === "--doctor") {
+	const { runDoctor } = await import("./tools/doctor.ts");
+	await runDoctor();
+	process.exit(0);
 }
 
 if (args[0] === "--list") {

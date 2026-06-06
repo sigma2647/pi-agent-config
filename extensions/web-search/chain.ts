@@ -2,11 +2,24 @@
 
 import type { Backend, BackendAttempt, SearchResult } from "./backends/types.ts";
 import { filterRelevant } from "./validate.ts";
+import { braveBackend } from "./backends/brave.ts";
+import { opencliBackend } from "./backends/opencli.ts";
+import { browserBackend } from "./backends/browser.ts";
 
 const REGISTRY = new Map<string, Backend>();
 
 export function registerBackend(b: Backend): void {
   REGISTRY.set(b.name, b);
+}
+
+// The built-in chain. Every entry point (dev.ts CLI, index.ts pi loader,
+// tools/doctor.ts) must call this before loadConfig()/runChain(), otherwise the
+// REGISTRY is empty and the chain reports every backend as "unknown". Idempotent
+// — re-registering the same name just overwrites.
+export function registerDefaultBackends(): void {
+  registerBackend(braveBackend);
+  registerBackend(opencliBackend);
+  registerBackend(browserBackend);
 }
 
 export function listBackends(): string[] {
