@@ -18,6 +18,7 @@ const USAGE = `usage:
   pi-wf --debug <url>            trace the fallback chain on stderr (timings
                                  and which extractor returned the result)
   pi-wf --doctor                 print environment & dependency self-check
+  pi-wf --smoke                  quick end-to-end self-check (3 cases, ~5s)
 env:
   PI_WF_PREFER_DEFUDDLE=0        opt out of defuddle-primary (use Readability)
   PI_WF_PLAYWRIGHT=1             always enable Playwright fallback
@@ -35,6 +36,11 @@ if (args[0] === "--doctor") {
 	const { runDoctor } = await import("./tools/doctor.ts");
 	await runDoctor();
 	process.exit(0);
+}
+
+if (args[0] === "--smoke") {
+	const { runSmoke } = await import("./tools/smoke.ts");
+	process.exit(await runSmoke());
 }
 
 let mode: "fetch" | "playwright" | "login" = "fetch";
