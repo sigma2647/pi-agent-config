@@ -6,7 +6,7 @@
 // before giving up, mirroring the logic in web-search/backends/browser.ts.
 
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, accessSync } from "node:fs";
 
 type PWLike = { chromium: any };
 
@@ -66,7 +66,7 @@ export async function loadPlaywright(): Promise<PWLike | null> {
 
 let cachedIsArch: boolean | undefined;
 
-function isArchLinux(): boolean {
+export function isArchLinux(): boolean {
 	if (cachedIsArch !== undefined) return cachedIsArch;
 	try {
 		const os = readFileSync("/etc/os-release", "utf8");
@@ -77,12 +77,43 @@ function isArchLinux(): boolean {
 	return cachedIsArch;
 }
 
+const SYSTEM_CHROMIUM = "/usr/bin/chromium";
+
+let cachedPwVersion: string | undefined;
+
+export function getPlaywrightVersion(): string | undefined {
+	if (cachedPwVersion !== undefined) return cachedPwVersion;
+	// Playwright CJS module doesn't expose .version when imported via ESM —
+	// read package.json from well-known Arch path or the npm global prefix.
+	for (const base of ["/usr/lib/node_modules/playwright", "/usr/lib/node_modules/playwright-core"]) {
+		try {
+			const pkg = JSON.parse(readFileSync(`${base}/package.json`, "utf8"));
+			if (pkg.version) {
+				cachedPwVersion = pkg.version;
+				return cachedPwVersion;
+			}
+		} catch { /* try next */ }
+	}
+	cachedPwVersion = undefined;
+	return undefined;
+}
+
+export function getPlaywrightExecutablePath(): string | undefined {
+	if (!isArchLinux()) return undefined;
+	try {
+		accessSync(SYSTEM_CHROMIUM);
+		return SYSTEM_CHROMIUM;
+	} catch {
+		return undefined;
+	}
+}
+
 export function playwrightInstallHint(): string {
 	if (isArchLinux()) {
 		return [
 			"install on Arch:",
-			"  sudo pacman -S playwright    # or: paru -S playwright",
-			"system chromium/firefox executables are wired via /etc/profile.d/playwright.sh",
+			"  sudo pacman -S playwright chromium",
+			"system chromium auto-detected at /usr/bin/chromium",
 		].join("\n");
 	}
 	return "install with: npm i -g playwright && npx playwright install chromium";

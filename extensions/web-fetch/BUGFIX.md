@@ -12,15 +12,15 @@
 
 ### 1. HTTP 5xx 后仍然跑完整条 fallback 链
 
-`extractViaHttp` 收到 502/503/522 等 5xx 错误后，继续尝试 defuddle → Jina → Playwright，全部打同一个不可达 URL，浪费 ~10s。最终 fallback 链耗尽时给的是通用提示 "JS-rendered or login-gated"，对 5xx 完全不适用。
+`extractViaHttp` 收到 502/503/522 等 5xx 错误后，fallback 链耗尽时给的通用提示 "JS-rendered or login-gated" 对 5xx 完全不适用。
 
-**修法**：`fetchAndExtract()` 的提前返回分支增加 `httpResult.error.startsWith("HTTP 5")`。
+**注意**：5xx 与 `fetch failed` 含义相反——`fetch failed` 是"没连上"（DNS/proxy/连接），换条路的 Jina 也撞同一堵墙；5xx 是"连上了、源站吐错"，常为间歇性，Jina Reader 走独立 egress + 缓存可能救活。因此**5xx 不短路**，继续走 Jina → Playwright，只在链耗尽时由 `describeNetworkError` 给准确提示。（早期版本曾把 `HTTP 5` 加进提前返回分支，与本节根因"间歇可达"自相矛盾，已移除。）
 
 ### 2. `extractWithDefuddle` 请求头不完整
 
 `extractViaHttp` 发完整浏览器头（`Sec-Fetch-Dest`、`Sec-Fetch-Mode`、`Accept-Language` 等），`extractWithDefuddle` 只发 `User-Agent`。不一致的请求特征可能触发不同 CDN/反爬策略。
 
-**修法**：`extractWithDefuddle` 补齐与 `extractViaHttp` 相同的浏览器头。
+**修法**：抽取 `BROWSER_HEADERS` 常量（单一知识源），`extractViaHttp` 与 `extractWithDefuddle` 共用，避免两处头表必须手动同步。
 
 ## 相关文件
 

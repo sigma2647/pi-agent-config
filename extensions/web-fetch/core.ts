@@ -3,10 +3,24 @@ import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import { ProxyAgent } from "undici";
 import { dispatchExtractor } from "./extractors/index.ts";
-import { loadPlaywright as resolvePlaywright } from "./playwright.ts";
+import { loadPlaywright as resolvePlaywright, getPlaywrightExecutablePath } from "./playwright.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+// Single source of truth for the browser request fingerprint. extractViaHttp
+// and extractWithDefuddle MUST send identical headers — inconsistent header
+// shapes trip different CDN/anti-bot policies. Add new headers here only.
+const BROWSER_HEADERS = {
+	"User-Agent": USER_AGENT,
+	Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	"Accept-Language": "en-US,en;q=0.9",
+	"Cache-Control": "no-cache",
+	"Sec-Fetch-Dest": "document",
+	"Sec-Fetch-Mode": "navigate",
+	"Sec-Fetch-Site": "none",
+	"Sec-Fetch-User": "?1",
+	"Upgrade-Insecure-Requests": "1",
+} as const;
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
 const MAX_PDF_SIZE = 20 * 1024 * 1024;
@@ -491,17 +505,7 @@ async function extractWithDefuddle(
 			const res = await fetch(ctx.url, {
 				signal: ctx.signal,
 				dispatcher: ctx.dispatcher,
-				headers: {
-					"User-Agent": USER_AGENT,
-					Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-					"Accept-Language": "en-US,en;q=0.9",
-					"Cache-Control": "no-cache",
-					"Sec-Fetch-Dest": "document",
-					"Sec-Fetch-Mode": "navigate",
-					"Sec-Fetch-Site": "none",
-					"Sec-Fetch-User": "?1",
-					"Upgrade-Insecure-Requests": "1",
-				},
+				headers: BROWSER_HEADERS,
 			});
 			if (!res.ok) return null;
 			html = await res.text();
@@ -633,6 +637,7 @@ async function extractWithPlaywright(
 
 	const browser = await pw.chromium.launchPersistentContext(PLAYWRIGHT_PROFILE_DIR, {
 		headless: true,
+		executablePath: getPlaywrightExecutablePath() ?? undefined,
 		userAgent: USER_AGENT,
 		viewport: { width: 1280, height: 800 },
 		locale: "zh-CN",
@@ -742,17 +747,7 @@ async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 		const response = await fetch(url, {
 			signal: controller.signal,
 			dispatcher: ctx.dispatcher,
-			headers: {
-				"User-Agent": USER_AGENT,
-				Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-				"Accept-Language": "en-US,en;q=0.9",
-				"Cache-Control": "no-cache",
-				"Sec-Fetch-Dest": "document",
-				"Sec-Fetch-Mode": "navigate",
-				"Sec-Fetch-Site": "none",
-				"Sec-Fetch-User": "?1",
-				"Upgrade-Insecure-Requests": "1",
-			},
+			headers: BROWSER_HEADERS,
 		});
 
 		if (!response.ok) {
@@ -986,14 +981,17 @@ export async function fetchAndExtract(
 	if (
 		httpResult.error.startsWith("Unsupported content type") ||
 		httpResult.error.startsWith("Response too large") ||
-		httpResult.error.startsWith("fetch failed") ||
-		httpResult.error.startsWith("HTTP 5")
+		httpResult.error.startsWith("fetch failed")
 	) {
-		// Network/server-level failures are a dead end — extra fallbacks
-		// (defuddle, Jina, playwright) all hit the same wall. Return the
-		// diagnostic error from describeNetworkError without the misleading
-		// "may be JS-rendered or login-gated" suffix.
-		log("→ returning: http error (network/content/server — no fallback)");
+		// Network/content-level dead ends — we never reached the origin
+		// (fetch failed) or the response is unusable by definition. Extra
+		// fallbacks (defuddle, Jina, playwright) hit the same wall. Return the
+		// diagnostic error without the misleading "JS-rendered/login-gated"
+		// suffix. NOTE: HTTP 5xx is deliberately NOT here — a 5xx means we DID
+		// reach the CDN/origin and it errored, often intermittently; Jina
+		// Reader fetches via a separate egress + cache and can still succeed,
+		// so 5xx falls through to the remaining chain.
+		log("→ returning: http error (network/content — no fallback)");
 		return httpResult;
 	}
 
