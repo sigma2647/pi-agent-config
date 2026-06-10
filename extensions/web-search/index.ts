@@ -14,14 +14,13 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   truncateHead,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 
-import { registerBackend, registerDefaultBackends, runChain, loadConfig, listBackends } from "./chain.ts";
+import { registerBackend, registerDefaultBackends, runChain, loadConfig, listBackends, FAST_OPTION_DESC } from "./chain.ts";
 import type { BackendAttempt, SearchResult } from "./backends/types.ts";
 
 // Re-exports for third-party extensions that want to register additional
@@ -118,11 +117,9 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
-      mode: StringEnum(["instant", "full"] as const, {
-        description:
-          '"instant" returns from the first available backend; "full" runs the full chain until a non-empty match',
-        default: "full",
-      }),
+      fast: Type.Optional(
+        Type.Boolean({ description: FAST_OPTION_DESC, default: false }),
+      ),
       chain: Type.Optional(
         Type.Array(Type.String(), {
           description:
@@ -140,16 +137,12 @@ export default function (pi: ExtensionAPI) {
       if (!args || typeof args !== "object") return args;
       const input = args as {
         query?: string;
-        mode?: string;
         q?: string;
         chain?: string[];
         proxy?: string;
       };
       if (!input.query && input.q) {
         return { ...input, query: input.q };
-      }
-      if (!input.mode) {
-        return { ...input, mode: "full" };
       }
       return args;
     },
@@ -168,7 +161,7 @@ export default function (pi: ExtensionAPI) {
       const effectiveSignal = signal ?? new AbortController().signal;
       const result = await runChain(params.query, effectiveSignal, {
         chain: params.chain,
-        shortCircuit: params.mode === "instant",
+        fast: params.fast,
         proxy: params.proxy,
       });
 
@@ -195,7 +188,7 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text: output }],
         details: {
           query: params.query,
-          mode: params.mode,
+          fast: params.fast ?? false,
           chain: result.kind === "ok" ? result.backend : "FAILED",
           attempts: result.attempts.map((a) => ({
             name: a.name,

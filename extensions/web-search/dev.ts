@@ -12,7 +12,8 @@ const USAGE = `usage:
                                  into jq).
   pi-ws --human <query>          human-readable output (numbered list)
   pi-ws --format json|human ...  same idea, explicit form
-  pi-ws --instant <query>        return first available backend's results
+  pi-ws --fast <query>           query only the first backend (brave); skip
+                                 the slower opencli/browser fallbacks
   pi-ws --chain a,b <query>      override fallback chain for this call
   pi-ws --proxy <url> <query>    per-call proxy override (e.g. --proxy http://127.0.0.1:7890)
                                  honored by brave; opencli inherits env;
@@ -60,7 +61,7 @@ function dieFlagNeedsArg(flag: string, hint: string): never {
 	process.exit(2);
 }
 
-let mode: "full" | "instant" = "full";
+let fast = false;
 let chain: string[] | undefined;
 let proxy: string | undefined;
 // Default: JSON. Override via --human / --format human or PI_WS_FORMAT=human.
@@ -69,7 +70,7 @@ let format: "json" | "human" = envFmt === "human" ? "human" : "json";
 let query: string | undefined;
 for (let i = 0; i < args.length; i++) {
 	const a = args[i];
-	if (a === "--instant") mode = "instant";
+	if (a === "--fast") fast = true;
 	else if (a === "--json") format = "json";
 	else if (a === "--human") format = "human";
 	else if (a === "--format") {
@@ -139,7 +140,7 @@ process.on("SIGINT", () => ctrl.abort());
 
 const result = await runChain(query, ctrl.signal, {
 	chain,
-	shortCircuit: mode === "instant",
+	fast,
 	proxy,
 });
 

@@ -17,6 +17,7 @@ export default function (pi: ExtensionAPI) {
 			"Use web_fetch whenever you need the actual content of a known URL, including URLs returned by web_search.",
 			"Default to web_fetch over web_search when the user names a specific resource or gives a URL (e.g. 'check the React docs', 'read this RFC', 'open this PR', 'look at <url>').",
 			"After web_search returns useful-looking results, follow up with web_fetch on the top URL(s) instead of answering from snippets — snippets are previews, not source.",
+			"GitHub commits / releases / repo activity → `gh api <endpoint>` (authenticated, 5000/hr), not web_fetch. web_fetch is for PR/issue/file content.",
 		],
 
 		parameters: Type.Object({

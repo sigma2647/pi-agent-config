@@ -8,7 +8,7 @@
 // skipped?" without digging through AGENTS.md.
 
 import { loadConfig, listBackends, registerDefaultBackends } from "../chain.ts";
-import { OK, BAD, WARN, which, probeTcp } from "../../_common/tools/cli-helpers.ts";
+import { OK, BAD, WARN, which, probeTcp, tryLoadEnv } from "../../_common/tools/cli-helpers.ts";
 
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";

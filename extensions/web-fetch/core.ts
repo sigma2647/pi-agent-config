@@ -8,6 +8,21 @@ import { extractWithDefuddle } from "./defuddle.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+// Single source of truth for the browser request fingerprint. extractViaHttp
+// (here) and extractWithDefuddle (defuddle.ts) MUST send identical headers —
+// inconsistent header shapes trip different CDN/anti-bot policies. Add headers
+// here only; defuddle.ts imports this same object.
+export const BROWSER_HEADERS = {
+	"User-Agent": USER_AGENT,
+	Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	"Accept-Language": "en-US,en;q=0.9",
+	"Cache-Control": "no-cache",
+	"Sec-Fetch-Dest": "document",
+	"Sec-Fetch-Mode": "navigate",
+	"Sec-Fetch-Site": "none",
+	"Sec-Fetch-User": "?1",
+	"Upgrade-Insecure-Requests": "1",
+} as const;
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
 const MAX_PDF_SIZE = 20 * 1024 * 1024;

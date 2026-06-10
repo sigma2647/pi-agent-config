@@ -41,6 +41,15 @@ const DEFAULT_TIMEOUTS: Record<string, number> = {
 const DEFAULT_TOTAL_TIMEOUT_MS = 15000;
 const DEFAULT_CHAIN = ["brave", "opencli", "browser"];
 
+// Single source of truth for the one user-facing chain knob. Both entry points
+// (index.ts tool param, dev.ts --fast flag) describe it from here and pass the
+// resulting boolean straight into runChain — they do NOT invent intermediate
+// vocabulary ("instant"/"full") or re-translate it to behaviour. Change the
+// meaning here and the signature below; the entry points just pass through.
+export const FAST_OPTION_DESC =
+  "Query only the first backend in the chain (fail-fast, lowest latency); " +
+  "skip the slower opencli/browser fallbacks even if the first returns nothing.";
+
 export function loadConfig(override?: {
   chain?: string[];
   totalTimeoutMs?: number;
@@ -85,9 +94,13 @@ export type ChainResult =
 export async function runChain(
   query: string,
   parentSignal: AbortSignal,
-  opts?: { chain?: string[]; shortCircuit?: boolean; proxy?: string },
+  opts?: { chain?: string[]; fast?: boolean; proxy?: string },
 ): Promise<ChainResult> {
   const cfg = loadConfig({ chain: opts?.chain });
+  // fast = primary backend only: slice the chain to its first entry so the
+  // existing stop-at-first-non-empty loop naturally fails fast without ever
+  // reaching the slow fallbacks. No special-casing inside the loop.
+  const effectiveChain = opts?.fast ? cfg.chain.slice(0, 1) : cfg.chain;
   const attempts: BackendAttempt[] = [];
 
   const totalCtl = new AbortController();
@@ -99,10 +112,7 @@ export async function runChain(
   );
 
   try {
-    const allResults: SearchResult[] = [];
-    const seenUrls = new Set<string>();
-
-    for (const name of cfg.chain) {
+    for (const name of effectiveChain) {
       if (totalCtl.signal.aborted) break;
 
       const backend = REGISTRY.get(name);
@@ -146,27 +156,16 @@ export async function runChain(
           continue;
         }
 
-        // Merge into allResults — dedup by URL, chain order determines priority
-        // (first backend's duplicate wins).
-        let added = 0;
-        for (const r of filtered) {
-          if (!seenUrls.has(r.url)) {
-            seenUrls.add(r.url);
-            allResults.push(r);
-            added++;
-          }
-        }
         attempts.push({
           name,
           status: { kind: "ok", resultCount: filtered.length },
           elapsedMs,
         });
 
-        if (opts?.shortCircuit) {
-          // instant mode: return first backend's results immediately
-          return { kind: "ok", backend: name, results: allResults, attempts };
-        }
-        // full mode: continue to next backend for breadth
+        // Stop at the first backend returning a non-empty result. The chain is
+        // brave (primary) → opencli/browser (fallbacks), not peer engines —
+        // fanning out + merging would add latency + noise for little breadth.
+        return { kind: "ok", backend: name, results: filtered, attempts };
       } catch (err) {
         const reason =
           err instanceof Error ? err.message : String(err);
@@ -179,15 +178,6 @@ export async function runChain(
         clearTimeout(perTimer);
         totalCtl.signal.removeEventListener("abort", fwd);
       }
-    }
-
-    // full mode: return merged results from all contributing backends
-    if (allResults.length > 0) {
-      const contributors = attempts
-        .filter((a) => a.status.kind === "ok")
-        .map((a) => a.name)
-        .join(",");
-      return { kind: "ok", backend: contributors, results: allResults, attempts };
     }
   } finally {
     clearTimeout(totalTimer);

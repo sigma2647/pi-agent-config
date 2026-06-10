@@ -7,6 +7,7 @@
 
 import { parseHTML } from "linkedom";
 import type { FetchContext, FetchResult } from "./core.ts";
+import { BROWSER_HEADERS } from "./core.ts";
 
 type DefuddleFn = (
 	input: any, // Document | string
@@ -46,25 +47,13 @@ export async function extractWithDefuddle(
 	const Defuddle = await loadDefuddle();
 	if (!Defuddle) return null;
 
-	const headers = {
-		"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-		Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-		"Accept-Language": "en-US,en;q=0.9",
-		"Cache-Control": "no-cache",
-		"Sec-Fetch-Dest": "document",
-		"Sec-Fetch-Mode": "navigate",
-		"Sec-Fetch-Site": "none",
-		"Sec-Fetch-User": "?1",
-		"Upgrade-Insecure-Requests": "1",
-	};
-
 	try {
 		let html = prefetchedHtml;
 		if (!html) {
 			const res = await fetch(ctx.url, {
 				signal: ctx.signal,
 				dispatcher: ctx.dispatcher,
-				headers,
+				headers: BROWSER_HEADERS,
 			});
 			if (!res.ok) return null;
 			html = await res.text();
@@ -115,7 +104,9 @@ export async function extractWithDefuddle(
 			console.warn = originalWarn;
 		}
 	} catch (e) {
-		if (ctx.debug) {
+		// FetchContext carries no debug flag; gate on the env var directly
+		// (same signal core.ts uses: opts.debug || PI_WF_DEBUG === "1").
+		if (process.env.PI_WF_DEBUG === "1") {
 			process.stderr.write(`[pi-wf] defuddle failed: ${(e as Error)?.message ?? e}\n`);
 		}
 		return null;
