@@ -491,7 +491,17 @@ async function extractWithDefuddle(
 			const res = await fetch(ctx.url, {
 				signal: ctx.signal,
 				dispatcher: ctx.dispatcher,
-				headers: { "User-Agent": USER_AGENT },
+				headers: {
+					"User-Agent": USER_AGENT,
+					Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+					"Accept-Language": "en-US,en;q=0.9",
+					"Cache-Control": "no-cache",
+					"Sec-Fetch-Dest": "document",
+					"Sec-Fetch-Mode": "navigate",
+					"Sec-Fetch-Site": "none",
+					"Sec-Fetch-User": "?1",
+					"Upgrade-Insecure-Requests": "1",
+				},
 			});
 			if (!res.ok) return null;
 			html = await res.text();
@@ -976,13 +986,14 @@ export async function fetchAndExtract(
 	if (
 		httpResult.error.startsWith("Unsupported content type") ||
 		httpResult.error.startsWith("Response too large") ||
-		httpResult.error.startsWith("fetch failed")
+		httpResult.error.startsWith("fetch failed") ||
+		httpResult.error.startsWith("HTTP 5")
 	) {
-		// Network-level failures are a dead end — extra fallbacks (defuddle,
-		// Jina, playwright) all hit the same wall. Return the diagnostic
-		// error from describeNetworkError without the misleading "may be
-		// JS-rendered or login-gated" suffix.
-		log("→ returning: http error (network/content type — no fallback)");
+		// Network/server-level failures are a dead end — extra fallbacks
+		// (defuddle, Jina, playwright) all hit the same wall. Return the
+		// diagnostic error from describeNetworkError without the misleading
+		// "may be JS-rendered or login-gated" suffix.
+		log("→ returning: http error (network/content/server — no fallback)");
 		return httpResult;
 	}
 
