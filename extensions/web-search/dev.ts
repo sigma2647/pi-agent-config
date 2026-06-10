@@ -1,6 +1,8 @@
 #!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings
 import { registerDefaultBackends, runChain, loadConfig, listBackends } from "./chain.ts";
+import { tryLoadEnv } from "../_common/tools/cli-helpers.ts";
 
+tryLoadEnv();
 registerDefaultBackends();
 
 const USAGE = `usage:

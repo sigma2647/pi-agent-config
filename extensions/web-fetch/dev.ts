@@ -1,5 +1,8 @@
 #!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings
 import { fetchAndExtract } from "./core.ts";
+import { tryLoadEnv } from "../_common/tools/cli-helpers.ts";
+
+tryLoadEnv();
 
 const USAGE = `usage:
   pi-wf <url>                    fetch + extract (text out on stdout)

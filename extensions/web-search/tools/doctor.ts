@@ -68,7 +68,19 @@ export async function runDoctor(): Promise<void> {
 
 	// opencli
 	const opencli = await which("opencli");
-	console.log(`  ${pad("opencli", COL1)} ${opencli ? OK + "  " + opencli : BAD + "  not on PATH — backend skipped"}`);
+	let opencliStatus = "";
+	if (opencli) {
+		try {
+			const { promisify } = await import("node:util");
+			const { execFile } = await import("node:child_process");
+			const execFileP = promisify(execFile);
+			const { stdout } = await execFileP("opencli", ["daemon", "status"], { timeout: 2000 });
+			opencliStatus = stdout.includes("running") ? " (daemon running)" : " (daemon NOT running)";
+		} catch {
+			opencliStatus = " (daemon status unknown)";
+		}
+	}
+	console.log(`  ${pad("opencli", COL1)} ${opencli ? OK + "  " + opencli + DIM + opencliStatus + RESET : BAD + "  not on PATH — backend skipped"}`);
 
 	// browser
 	const cdpUrl = process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
@@ -79,6 +91,13 @@ export async function runDoctor(): Promise<void> {
 	console.log(`  ${pad("browser", COL1)} ${browserOk ? OK : BAD}${browserOk ? "" : "  no CDP endpoint and no browser-harness — backend skipped"}`);
 	console.log(`    ${pad("CDP", COL1-2)} ${cdpUp ? OK : WARN}  ${cdpUrl}${cdpUp ? "" : " (not reachable)"}`);
 	console.log(`    ${pad("harness", COL1-2)} ${harness ? OK : WARN}  ${harness ?? "(not on PATH)"}`);
+
+	if (!browserOk) {
+		const { isArchLinux } = await import("../_common/playwright-utils.ts");
+		if (isArchLinux()) {
+			console.log(`    ${WARN} ${DIM}Suggestion: sudo pacman -S chromium${RESET}`);
+		}
+	}
 
 	// ── Proxy ──
 	section("Proxy");
@@ -105,11 +124,19 @@ export async function runDoctor(): Promise<void> {
 	console.log(`  ${pad("PI_WS_FORMAT", COL1)} ${process.env.PI_WS_FORMAT ?? DIM + "(unset)" + RESET}`);
 	console.log(`  ${pad("PI_WS_CHAIN", COL1)} ${process.env.PI_WEB_SEARCH_CHAIN ?? DIM + "(unset)" + RESET}`);
 
+	// ── Setup Guide ──
+	section("New Device Setup");
+	console.log(`  1. Ensure you have a browser installed (Chromium recommended).`);
+	console.log(`  2. For Playwright/Defuddle: run ${BOLD}pi-wf --login https://www.google.com${RESET} once.`);
+	console.log(`  3. If using Brave: set ${BOLD}BRAVE_SEARCH_API_KEY${RESET} in ~/.env (auto-loaded).`);
+	console.log(`  4. If browser-harness fails: ensure Chrome is running with ${DIM}--remote-debugging-port=9222${RESET}`);
+
 	console.log("");
 }
 
 // CLI entry — only runs when executed directly, not when imported.
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
+	tryLoadEnv();
 	await runDoctor();
 }

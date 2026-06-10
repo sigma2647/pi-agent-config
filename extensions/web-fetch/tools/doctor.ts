@@ -10,7 +10,7 @@ import { statSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPlaywright, getPlaywrightExecutablePath, getPlaywrightVersion, isArchLinux } from "../playwright.ts";
-import { OK, BAD, WARN, which, probeTcp } from "../../_common/tools/cli-helpers.ts";
+import { OK, BAD, WARN, which, probeTcp, tryLoadEnv } from "../../_common/tools/cli-helpers.ts";
 
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
@@ -152,5 +152,6 @@ export async function runDoctor(): Promise<void> {
 // CLI entry — only runs when executed directly, not when imported.
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
+	tryLoadEnv();
 	await runDoctor();
 }
