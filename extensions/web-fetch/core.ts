@@ -4,23 +4,10 @@ import TurndownService from "turndown";
 import { ProxyAgent } from "undici";
 import { dispatchExtractor } from "./extractors/index.ts";
 import { loadPlaywright as resolvePlaywright, getPlaywrightExecutablePath } from "./playwright.ts";
+import { extractWithDefuddle } from "./defuddle.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-// Single source of truth for the browser request fingerprint. extractViaHttp
-// and extractWithDefuddle MUST send identical headers — inconsistent header
-// shapes trip different CDN/anti-bot policies. Add new headers here only.
-const BROWSER_HEADERS = {
-	"User-Agent": USER_AGENT,
-	Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-	"Accept-Language": "en-US,en;q=0.9",
-	"Cache-Control": "no-cache",
-	"Sec-Fetch-Dest": "document",
-	"Sec-Fetch-Mode": "navigate",
-	"Sec-Fetch-Site": "none",
-	"Sec-Fetch-User": "?1",
-	"Upgrade-Insecure-Requests": "1",
-} as const;
 const DEFAULT_TIMEOUT_MS = 30000;
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024;
 const MAX_PDF_SIZE = 20 * 1024 * 1024;
@@ -449,97 +436,6 @@ function extractHeadingTitle(text: string): string | null {
 	if (!match) return null;
 	const cleaned = match[1].replace(/\*+/g, "").trim();
 	return cleaned || null;
-}
-
-// ── Defuddle (library API) ───────────────────────────────────────────
-// Article extractor from https://github.com/kepano/defuddle. Used to live as a
-// CLI subprocess + tmpfile dance (~4s per call, half of which was Node startup
-// and JSON serialization). The `defuddle/node` bundle exposes the same engine
-// as a function — we feed it the linkedom Document we already have and skip
-// the subprocess entirely. ~10x faster (~400ms total) and reuses the proxy-
-// aware HTML fetch we did in extractViaHttp.
-//
-// Why prefer defuddle over Readability for certain sites: it standardizes
-// footnotes / code blocks / callouts / math at the DOM level *before* Markdown
-// conversion, producing Pandoc-style `[^N]:` instead of wiki backref junk.
-// For citation-heavy pages (wikis, academic articles) it is dramatically
-// cleaner. For blogs/news, Readability is usually equivalent and faster.
-
-type DefuddleFn = (
-	input: Document | string,
-	url?: string,
-	options?: { markdown?: boolean; debug?: boolean; url?: string },
-) => Promise<{
-	title?: string;
-	author?: string;
-	published?: string;
-	description?: string;
-	content?: string;
-	wordCount?: number;
-}>;
-
-let defuddleFn: DefuddleFn | null | undefined;
-
-async function loadDefuddle(): Promise<DefuddleFn | null> {
-	if (defuddleFn !== undefined) return defuddleFn;
-	try {
-		const m: any = await import("defuddle/node");
-		defuddleFn = (m.Defuddle ?? m.default?.Defuddle ?? null) as DefuddleFn | null;
-	} catch {
-		defuddleFn = null;
-	}
-	return defuddleFn;
-}
-
-async function extractWithDefuddle(
-	ctx: FetchContext,
-	prefetchedHtml?: string,
-): Promise<FetchResult | null> {
-	const Defuddle = await loadDefuddle();
-	if (!Defuddle) return null;
-	try {
-		// Reuse HTML if extractViaHttp already fetched it (--defuddle path
-		// passes it through); otherwise fetch ourselves using ctx's dispatcher.
-		let html = prefetchedHtml;
-		if (!html) {
-			const res = await fetch(ctx.url, {
-				signal: ctx.signal,
-				dispatcher: ctx.dispatcher,
-				headers: BROWSER_HEADERS,
-			});
-			if (!res.ok) return null;
-			html = await res.text();
-		}
-		if (ctx.signal?.aborted) return null;
-
-		const { document } = parseHTML(html);
-		const r = await Defuddle(document, ctx.url, { markdown: true });
-		const markdown = (r.content ?? "").trim();
-		if (markdown.length < MIN_USEFUL_CONTENT) return null;
-
-		const meta: string[] = [];
-		if (r.author) meta.push(`作者: ${r.author}`);
-		if (r.published) meta.push(`发布: ${r.published.slice(0, 10)}`);
-		if (r.wordCount) meta.push(`字数: ${r.wordCount}`);
-
-		// Don't repeat the title inside `content` — dev.ts derives a `# title`
-		// header from `result.title`. Only emit extras that wouldn't otherwise
-		// surface (meta line + description).
-		const lines: string[] = [];
-		if (meta.length) lines.push(`> ${meta.join(" · ")}`, "");
-		if (r.description) lines.push(`> ${r.description}`, "");
-		if (meta.length || r.description) lines.push("");
-		lines.push(markdown);
-
-		return {
-			url: ctx.url,
-			title: r.title ?? "",
-			content: lines.join("\n"),
-			error: null,
-		};
-	} catch {
-		return null;
-	}
 }
 
 // ── Playwright Fallback (persistent profile) ─────────────────────────
