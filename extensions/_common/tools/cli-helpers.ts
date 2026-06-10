@@ -1,4 +1,4 @@
-// Mirror of extensions/web-search/tools/cli-helpers.ts — keep in sync.
+// Shared CLI helpers for pi extensions. Keep in sync.
 //
 // Shared by tools/doctor.ts and tools/smoke.ts. Color glyphs and small
 // process utilities. Always emits color — TTY-conditional coloring is the

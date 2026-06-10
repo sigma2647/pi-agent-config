@@ -10,7 +10,7 @@ import { statSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPlaywright, getPlaywrightExecutablePath, getPlaywrightVersion, isArchLinux } from "../playwright.ts";
-import { OK, BAD, WARN, which, probeTcp } from "./cli-helpers.ts";
+import { OK, BAD, WARN, which, probeTcp } from "../../_common/tools/cli-helpers.ts";
 
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";

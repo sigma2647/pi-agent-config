@@ -1,7 +1,7 @@
 // backends/browser.ts
 
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
+import { loadPlaywright, decodeBingUrl } from "../../_common/playwright-utils.ts";
 import type { Backend, SearchResult } from "./types.ts";
 
 async function which(cmd: string): Promise<boolean> {
@@ -66,14 +66,14 @@ async function pickAvailable(): Promise<PickedBackend> {
     return (await which("browser-harness")) ? "harness" : "none";
   }
   if (forced === "playwright") {
-    return (await isCdpReachable()) && (await tryImportPlaywright()) !== null
+    return (await isCdpReachable()) && (await loadPlaywright()) !== null
       ? "playwright"
       : "none";
   }
   // auto: prefer playwright when a CDP endpoint is reachable (cheaper,
   // reuses your running browser); fall back to harness; else none.
   if (await isCdpReachable()) {
-    if ((await tryImportPlaywright()) !== null) return "playwright";
+    if ((await loadPlaywright()) !== null) return "playwright";
   }
   if (await which("browser-harness")) return "harness";
   return "none";
@@ -181,61 +181,6 @@ function parseHarnessOutput(stdout: string): SearchResult[] {
   }
 }
 
-// ---------- playwright (connect-over-CDP) path ----------
-
-const PLAYWRIGHT_CANDIDATES = [
-  "playwright",
-  "playwright-core",
-  "/usr/lib/node_modules/playwright",
-  "/usr/lib/node_modules/playwright-core",
-  "/usr/local/lib/node_modules/playwright",
-  "/usr/local/lib/node_modules/playwright-core",
-];
-
-let cachedPlaywright: { chromium: any } | null | undefined;
-
-function extractChromium(m: any): any | null {
-  // Playwright is published as CJS; dynamic ESM import wraps named exports
-  // both at the top level and under `default`. Probe both.
-  return m?.chromium ?? m?.default?.chromium ?? null;
-}
-
-async function tryImportPlaywright(): Promise<{ chromium: any } | null> {
-  if (cachedPlaywright !== undefined) return cachedPlaywright;
-  for (const spec of PLAYWRIGHT_CANDIDATES) {
-    try {
-      const m: any = await import(spec);
-      const chromium = extractChromium(m);
-      if (chromium) {
-        cachedPlaywright = { chromium };
-        return cachedPlaywright;
-      }
-    } catch {
-      /* try next */
-    }
-  }
-  // Last resort: createRequire pointed at well-known locations.
-  for (const base of [
-    "/usr/lib/node_modules/",
-    "/usr/local/lib/node_modules/",
-  ]) {
-    try {
-      const req = createRequire(base);
-      const resolved = req.resolve("playwright");
-      const m: any = await import(resolved);
-      const chromium = extractChromium(m);
-      if (chromium) {
-        cachedPlaywright = { chromium };
-        return cachedPlaywright;
-      }
-    } catch {
-      /* try next */
-    }
-  }
-  cachedPlaywright = null;
-  return null;
-}
-
 async function resolveWsEndpoint(): Promise<string> {
   // playwright's HTTP probe of /json/version appends an extra trailing slash
   // that some Chromium builds reject with 400. Resolve the ws URL ourselves
@@ -252,7 +197,7 @@ async function runPlaywright(
   query: string,
   signal: AbortSignal,
 ): Promise<SearchResult[]> {
-  const pw = await tryImportPlaywright();
+  const pw = await loadPlaywright();
   if (!pw) throw new Error("playwright not resolvable from any known path");
 
   const wsEndpoint = await resolveWsEndpoint();

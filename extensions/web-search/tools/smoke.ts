@@ -7,7 +7,7 @@
 
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { which } from "./cli-helpers.ts";
+import { which } from "../../_common/tools/cli-helpers.ts";
 
 const execFileP = promisify(execFile);
 
