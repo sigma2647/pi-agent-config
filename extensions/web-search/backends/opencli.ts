@@ -11,14 +11,25 @@ async function which(cmd: string): Promise<boolean> {
   });
 }
 
-function runOpencli(
+// Search adapters to try in order. Each runs `opencli <adapter> search <query> -f json`.
+// Override via PI_OPENCLI_SEARCH_ADAPTERS env var (comma-separated).
+const DEFAULT_ADAPTERS = ["google", "duckduckgo", "brave"];
+
+function getAdapters(): string[] {
+  const raw = process.env.PI_OPENCLI_SEARCH_ADAPTERS;
+  if (raw) return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return DEFAULT_ADAPTERS;
+}
+
+function runAdapter(
+  adapter: string,
   query: string,
   signal: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(
       "opencli",
-      ["google", "search", query, "-f", "json"],
+      [adapter, "search", query, "-f", "json"],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
 
@@ -45,7 +56,7 @@ function runOpencli(
         return;
       }
       if (code !== 0) {
-        const msg = stderr.trim() || `opencli exit ${code}`;
+        const msg = stderr.trim() || `opencli ${adapter} exit ${code}`;
         reject(new Error(msg));
         return;
       }
@@ -119,7 +130,19 @@ export const opencliBackend: Backend = {
   },
 
   async search(query, signal) {
-    const stdout = await runOpencli(query, signal);
-    return parseResults(stdout);
+    const adapters = getAdapters();
+    const errors: string[] = [];
+    for (const a of adapters) {
+      if (signal.aborted) throw new Error("aborted");
+      try {
+        const stdout = await runAdapter(a, query, signal);
+        const results = parseResults(stdout);
+        if (results.length > 0) return results;
+        errors.push(`${a}: empty`);
+      } catch (err) {
+        errors.push(`${a}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    throw new Error(`opencli adapters exhausted: ${errors.join("; ")}`);
   },
 };

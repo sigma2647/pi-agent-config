@@ -85,7 +85,7 @@ function formatFailure(query: string, attempts: BackendAttempt[]): string {
             : "OK";
     const reason =
       a.status.kind === "ok"
-        ? `${a.status.results.length} results`
+        ? `${a.status.resultCount} results`
         : a.status.reason;
     lines.push(`  - ${a.name}: ${tag} (${reason}) [${a.elapsedMs}ms]`);
   }

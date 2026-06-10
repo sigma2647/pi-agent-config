@@ -161,7 +161,7 @@ if (result.kind === "ok") {
 			a.status.kind === "skipped" ? "SKIPPED" :
 			a.status.kind === "failed"  ? "FAILED"  :
 			a.status.kind === "empty"   ? "EMPTY"   : "OK";
-		const reason = a.status.kind === "ok" ? `${a.status.results.length} results` : a.status.reason;
+		const reason = a.status.kind === "ok" ? `${a.status.resultCount} results` : a.status.reason;
 		console.error(`  - ${a.name}: ${tag} (${reason}) [${a.elapsedMs}ms]`);
 	}
 	process.exit(1);

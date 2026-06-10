@@ -99,6 +99,9 @@ export async function runChain(
   );
 
   try {
+    const allResults: SearchResult[] = [];
+    const seenUrls = new Set<string>();
+
     for (const name of cfg.chain) {
       if (totalCtl.signal.aborted) break;
 
@@ -143,16 +146,27 @@ export async function runChain(
           continue;
         }
 
+        // Merge into allResults — dedup by URL, chain order determines priority
+        // (first backend's duplicate wins).
+        let added = 0;
+        for (const r of filtered) {
+          if (!seenUrls.has(r.url)) {
+            seenUrls.add(r.url);
+            allResults.push(r);
+            added++;
+          }
+        }
         attempts.push({
           name,
-          status: { kind: "ok", results: filtered },
+          status: { kind: "ok", resultCount: filtered.length },
           elapsedMs,
         });
 
         if (opts?.shortCircuit) {
-          return { kind: "ok", backend: name, results: filtered, attempts };
+          // instant mode: return first backend's results immediately
+          return { kind: "ok", backend: name, results: allResults, attempts };
         }
-        return { kind: "ok", backend: name, results: filtered, attempts };
+        // full mode: continue to next backend for breadth
       } catch (err) {
         const reason =
           err instanceof Error ? err.message : String(err);
@@ -165,6 +179,15 @@ export async function runChain(
         clearTimeout(perTimer);
         totalCtl.signal.removeEventListener("abort", fwd);
       }
+    }
+
+    // full mode: return merged results from all contributing backends
+    if (allResults.length > 0) {
+      const contributors = attempts
+        .filter((a) => a.status.kind === "ok")
+        .map((a) => a.name)
+        .join(",");
+      return { kind: "ok", backend: contributors, results: allResults, attempts };
     }
   } finally {
     clearTimeout(totalTimer);

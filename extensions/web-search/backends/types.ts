@@ -7,7 +7,7 @@ export type SearchResult = {
 };
 
 export type BackendStatus =
-  | { kind: "ok"; results: SearchResult[] }
+  | { kind: "ok"; resultCount: number }
   | { kind: "skipped"; reason: string }
   | { kind: "failed"; reason: string }
   | { kind: "empty"; reason: string };
