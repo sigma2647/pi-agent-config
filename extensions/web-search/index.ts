@@ -20,8 +20,11 @@ import {
   DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 
+import { tryLoadEnv } from "../_common/tools/cli-helpers.ts";
 import { registerBackend, registerDefaultBackends, runChain, loadConfig, listBackends, FAST_OPTION_DESC } from "./chain.ts";
 import type { BackendAttempt, SearchResult } from "./backends/types.ts";
+
+tryLoadEnv();
 
 // Re-exports for third-party extensions that want to register additional
 // backends without reaching into internal paths. A separate extension can
