@@ -158,3 +158,27 @@ When user shows external analyses recommending sweeping feature additions OR swe
 If a recommendation passes all three, it's worth considering. If it fails any, push back with the specific failure mode rather than soft-rejecting.
 
 **Anti-pattern to avoid:** Producing a "balanced" summary that half-validates both extreme analyses to seem neutral. The user wants honest pushback with specific counter-evidence (cite the relevant section above, the relevant measurement, the relevant prior decision), not feature-checklist mediation. See §3.
+
+## 6. Site-scoped search → guideline pointer, not chain backend
+
+When the user asks "add X site search to web-search", the instinct is to write a new `backends/x.ts` and register it in the chain. **Don't.** The `brave → opencli → browser` chain is composed of interchangeable general web engines; it stops at the first non-empty backend. A site-scoped backend (Bilibili, Zhihu, Weibo, WeChat Official Accounts, YouTube, arXiv, BOSS直聘 …) would intercept *every* query — not just queries about that site — because it almost always returns *something* (even if irrelevant). Result: brave is permanently bypassed, and technical queries get garbage.
+
+**Correct pattern** (applied twice now — bilibili, weixin):
+
+1. Check if opencli already has an adapter for the site (`opencli list | grep -i <site>`)
+2. If yes → add a `promptGuidelines` entry in `web-search/index.ts` telling the agent to use `opencli <site> search "<kw>" -f json` directly, and mention it in the `description` site list
+3. For content extraction (the "内容" half), check if the corresponding web-fetch domain extractor exists (`extensions/web-fetch/extractors/`); if not, that's a separate task
+
+**Why this works:** The agent reads `promptGuidelines` before every `web_search` call. A concrete example (`opencli weixin search "<kw>" -f json`) is all it needs to route correctly. No routing code, no domain list, no backend file. The opencli adapter already handles auth/session/parsing — the only gap was discoverability.
+
+**Why NOT a backend:**
+
+| Problem | Consequence |
+|---------|-------------|
+| Chain is stop-at-first-non-empty | A weixin backend that returns results for "Rust async trait" blocks brave forever |
+| Site backends aren't interchangeable | You can't swap weixin for brave — they search different corpora |
+| Adds ~80 lines of code per site | vs 2 lines of guideline text; same UX for the agent |
+
+**The one exception:** If the site's search is a genuine *general web search engine* (like SearXNG, Kagi, You.com), then yes — that IS a backend, because it covers the same corpus as brave and can substitute for it. The test: "would I be happy if this backend answered ALL my queries, including technical ones?" If no → guideline pointer. If yes → backend.
+
+**Related:** The web-fetch side has the opposite pattern — domain extractors ARE the right place for site-specific structured extraction (PR comments, Reddit threads, HN nested replies), because the fallback chain there is per-URL and extractors only activate for their matching domains. The asymmetry is correct: search is query→results (all backends compete for every query), fetch is URL→markdown (extractors only fire for their own domains).

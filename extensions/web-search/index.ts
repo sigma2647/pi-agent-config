@@ -110,13 +110,14 @@ export default function (pi: ExtensionAPI) {
       "Search the web via Brave → opencli → browser fallback chain. " +
       "Returns ranked URLs with titles and short snippets — NOT full page content. " +
       "To read a result's full content, call web_fetch on its URL. " +
-      "For site-scoped search (Bilibili/Zhihu/YouTube/etc.), prefer the site's opencli adapter (`opencli list`).",
+      "For site-scoped search (Bilibili/Zhihu/YouTube/WeChat Official Accounts/etc.), prefer the site's opencli adapter (`opencli list`).",
     promptSnippet: "Search the web with backend fallback",
     promptGuidelines: [
       "Use web_search to DISCOVER URLs when you don't already know where the information lives.",
       "Snippets returned are 1-2 sentence previews — treat them as link previews, NOT as the answer.",
       "After web_search returns relevant URLs, follow up with web_fetch on the top result(s) to read the actual page. Only answer from snippets alone if the user merely needs a URL or a one-line confirmation.",
-      "web_search 走通用引擎。若目标是某个站点内的结构化搜索（B站视频、知乎、微博、YouTube、arXiv、BOSS直聘 等），通用引擎结果差——改用该站的 opencli adapter，经 Bash 调用，如 `opencli bilibili search \"<kw>\" -f json`。站点命令格式为 `opencli <site> <action>`，常见站点直接用；不确定某站是否支持时再 `opencli list | grep -i <site>`（list 全量 900+ 行会被截断，务必 grep）。",
+      "web_search 走通用引擎。若目标是某个站点内的结构化搜索（B站视频、知乎、微博、YouTube、arXiv、BOSS直聘、微信公众号 等），通用引擎结果差——改用该站的 opencli adapter，经 Bash 调用，如 `opencli bilibili search \"<kw>\" -f json`。站点命令格式为 `opencli <site> <action>`，常见站点直接用；不确定某站是否支持时再 `opencli list | grep -i <site>`（list 全量 900+ 行会被截断，务必 grep）。",
+      "微信公众号文章搜索用 `opencli weixin search \"<kw>\" -f json`（搜狗微信），返回 title/url/summary/publish_time。获取正文 Markdown 用 `opencli weixin download <url> -f json`。",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
