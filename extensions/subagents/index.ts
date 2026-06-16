@@ -80,6 +80,8 @@ interface Details {
 
 interface ExtensionConfig {
 	maxConcurrency?: number;
+	/** Per-agent model override. Falls back to frontmatter `model` if absent. */
+	models?: Record<string, string>;
 }
 
 const EXT_DIR = path.dirname(new URL(import.meta.url).pathname);
@@ -165,9 +167,10 @@ export function unregisterAgent(name: string): void {
 // (which creates separate module instances) can access the shared agents array.
 (globalThis as any).__pi_subagents = { registerAgent, unregisterAgent };
 
-function loadAgents(): AgentConfig[] {
+function loadAgents(config: ExtensionConfig): AgentConfig[] {
 	const loaded: AgentConfig[] = [];
 	if (!fs.existsSync(AGENTS_DIR)) return loaded;
+	const modelOverrides = config.models ?? {};
 	for (const entry of fs.readdirSync(AGENTS_DIR)) {
 		if (!entry.endsWith(".md")) continue;
 		const filePath = path.join(AGENTS_DIR, entry);
@@ -182,11 +185,12 @@ function loadAgents(): AgentConfig[] {
 		const subagentAgents = rawSubagentAgents
 			? rawSubagentAgents.split(",").map((t) => t.trim()).filter(Boolean)
 			: undefined;
+		const frontmatterModel = frontmatter.model || "openrouter/z-ai/glm-5.1";
 		loaded.push({
 			name: frontmatter.name,
 			description: frontmatter.description || "",
 			tools,
-			model: frontmatter.model || "openrouter/z-ai/glm-5.1",
+			model: modelOverrides[frontmatter.name] ?? frontmatterModel,
 			thinking: frontmatter.thinking || "medium",
 			systemPrompt: body,
 			filePath,
@@ -696,7 +700,7 @@ function renderAgentProgress(
 export default function (pi: ExtensionAPI) {
 	const config = loadConfig();
 	const semaphore = new Semaphore(config.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY);
-	agents = loadAgents();
+	agents = loadAgents(config);
 
 	if (SUBAGENT_ALLOWLIST) {
 		agents = agents.filter((a) => SUBAGENT_ALLOWLIST.includes(a.name));
