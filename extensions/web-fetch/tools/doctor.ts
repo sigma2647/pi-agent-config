@@ -10,6 +10,7 @@ import { statSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPlaywright, getPlaywrightExecutablePath, getPlaywrightVersion, isArchLinux } from "../playwright.ts";
+import { loadCloakBrowser } from "../cloakbrowser.ts";
 import { OK, BAD, WARN, which, probeTcp, tryLoadEnv } from "../../_common/tools/cli-helpers.ts";
 
 const BOLD = "\x1b[1m";
@@ -137,6 +138,19 @@ export async function runDoctor(): Promise<void> {
 
 	if (pw) {
 		console.log(`  ${pad("Auto-hosts", COL1)} ${DIM}zhihu.com, weibo.com, xiaohongshu.com${RESET}`);
+	}
+
+	// ── CloakBrowser ──
+	section("CloakBrowser");
+	const cb = await loadCloakBrowser();
+	if (cb) {
+		const cbBinaryPath = `${process.env.HOME ?? ""}/.cloakbrowser/chromium-146.0.7680.177.5/chrome`;
+		let binaryOk = false;
+		try { statSync(cbBinaryPath); binaryOk = true; } catch { /* not found */ }
+		console.log(`  ${pad("Package", COL1)} ${OK}  installed`);
+		console.log(`  ${pad("Binary", COL1)} ${binaryOk ? OK + "  " + cbBinaryPath : BAD + "  not found — pre-download with curl -x <proxy> ..."}`);
+	} else {
+		console.log(`  ${pad("Package", COL1)} ${WARN}  not installed  —  npm install cloakbrowser playwright-core`);
 	}
 
 	// ── Flags ──

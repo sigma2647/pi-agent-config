@@ -6,11 +6,15 @@
 // done — cookies persist in the profile dir and subsequent pi-wf calls with
 // PI_WF_PLAYWRIGHT=1 (or `pi-wf --playwright`) reuse them.
 //
+// Prefers CloakBrowser (C++-level stealth) when installed; falls back to
+// Playwright Chromium + JS stealth script.
+//
 // Usage:
 //   pi-wf --login <url>              # via pi-wf entry point
 //   ./tools/login_bootstrap.ts <url> # direct
 
 import readline from "node:readline";
+import { loadCloakBrowser } from "../cloakbrowser.ts";
 import { loadPlaywright, getPlaywrightExecutablePath, playwrightInstallHint } from "../playwright.ts";
 
 const UA =
@@ -21,6 +25,39 @@ export async function runLoginBootstrap(url: string): Promise<void> {
 		process.env.PI_WF_PROFILE ??
 		`${process.env.HOME ?? ""}/.pw-capture-profile`;
 
+	console.error(`profile: ${profileDir}`);
+
+	// Prefer CloakBrowser — C++-level stealth, no JS injection needed.
+	const cb = await loadCloakBrowser();
+	if (cb) {
+		console.error("using CloakBrowser (stealth Chromium)");
+		console.error(`opening ${url} in a Chrome window…`);
+
+		const ctx = await cb.launchPersistentContext({
+			userDataDir: profileDir,
+			headless: false,
+			args: ["--no-sandbox", "--disable-dev-shm-usage"],
+		});
+
+		const page = ctx.pages()[0] ?? (await ctx.newPage());
+		await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+		console.error("\n  ↳ log in in the browser window that just opened.");
+		console.error("  ↳ when done, press Enter here to save cookies and exit.\n");
+
+		const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+		await new Promise<void>((resolve) =>
+			rl.question("press Enter when done: ", () => resolve()),
+		);
+		rl.close();
+
+		await ctx.close();
+		console.error("cookies saved. now try:");
+		console.error(`  pi-wf --playwright ${url}`);
+		return;
+	}
+
+	// Fall back to Playwright Chromium + JS stealth script.
 	const pw = await loadPlaywright();
 	if (!pw) {
 		console.error("error: playwright is not installed.");
@@ -29,7 +66,6 @@ export async function runLoginBootstrap(url: string): Promise<void> {
 	}
 	const { chromium } = pw;
 
-	console.error(`profile: ${profileDir}`);
 	console.error(`opening ${url} in a Chrome window…`);
 
 	const ctx = await chromium.launchPersistentContext(profileDir, {

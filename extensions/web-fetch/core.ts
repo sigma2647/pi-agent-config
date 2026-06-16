@@ -4,6 +4,7 @@ import TurndownService from "turndown";
 import { ProxyAgent } from "undici";
 import { dispatchExtractor } from "./extractors/index.ts";
 import { loadPlaywright as resolvePlaywright, getPlaywrightExecutablePath } from "./playwright.ts";
+import { loadCloakBrowser } from "./cloakbrowser.ts";
 import { extractWithDefuddle } from "./defuddle.ts";
 
 const USER_AGENT =
@@ -470,6 +471,12 @@ const PLAYWRIGHT_PROFILE_DIR =
 	process.env.PI_WF_PROFILE ??
 	`${process.env.HOME ?? ""}/.pw-capture-profile`;
 
+// CloakBrowser uses a separate profile dir — its Chromium binary is a
+// different build from Playwright's, and profile formats are incompatible.
+const CLOAKBROWSER_PROFILE_DIR =
+	process.env.PI_WF_PROFILE ??
+	`${process.env.HOME ?? ""}/.cb-capture-profile`;
+
 // Minimal stealth init script — patches the headless tells that anti-bot
 // scripts check first (navigator.webdriver, window.chrome, userAgentData,
 // platform). Adapted from tiktok_clawler/config.py. Injected via
@@ -533,10 +540,84 @@ function playwrightWantedFor(url: string): boolean {
 
 const loadPlaywright = resolvePlaywright;
 
+// One-time hint when CloakBrowser isn't installed but Playwright fallback is used.
+let cloakbrowserHintShown = false;
+
+// ── Browser-based extraction (CloakBrowser → Playwright fallback) ────
+// Two paths to the same result: CloakBrowser (C++-level stealth, no JS
+// injection) is preferred when installed. Playwright + STEALTH_SCRIPT is
+// the fallback for environments without the cloakbrowser npm package.
+
+async function extractWithCloakBrowser(
+	ctx: FetchContext,
+	cb: Awaited<ReturnType<typeof loadCloakBrowser>>,
+): Promise<FetchResult | null> {
+	const proxy = effectiveProxy(ctx);
+
+	const browserCtx = await cb!.launchPersistentContext({
+		userDataDir: CLOAKBROWSER_PROFILE_DIR,
+		headless: true,
+		proxy: proxy || undefined,
+		args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+	});
+
+	let html: string | null = null;
+	try {
+		const page = await browserCtx.newPage();
+		const onAbort = () => page.close().catch(() => {});
+		ctx.signal?.addEventListener("abort", onAbort);
+		try {
+			await page
+				.goto(ctx.url, { waitUntil: "domcontentloaded", timeout: PLAYWRIGHT_TIMEOUT_MS })
+				.catch(() => {}); // some SPAs never fire DOMContentLoaded — keep going
+			await page.waitForTimeout(PLAYWRIGHT_SETTLE_MS);
+			html = await page.content();
+		} finally {
+			ctx.signal?.removeEventListener("abort", onAbort);
+		}
+	} catch {
+		html = null;
+	} finally {
+		await browserCtx.close().catch(() => {});
+	}
+
+	if (!html) return null;
+
+	if (/安全验证|请您登录|please log\s*in|captcha required/i.test(html.slice(0, 2000))) {
+		return null;
+	}
+
+	const { document } = parseHTML(html);
+	const reader = new Readability(document as unknown as Document);
+	const article = reader.parse();
+	if (!article) return null;
+
+	const markdown = postProcessMarkdown(turndown.turndown(article.content), ctx.url);
+	if (markdown.length < MIN_USEFUL_CONTENT) return null;
+	return {
+		url: ctx.url,
+		title: article.title || "",
+		content: markdown,
+		error: null,
+	};
+}
+
 async function extractWithPlaywright(
 	ctx: FetchContext,
 ): Promise<FetchResult | null> {
 	if (!playwrightWantedFor(ctx.url)) return null;
+
+	// Prefer CloakBrowser — C++-level stealth, no JS injection needed.
+	const cb = await loadCloakBrowser();
+	if (cb) return extractWithCloakBrowser(ctx, cb);
+
+	// Fall back to Playwright Chromium + JS stealth script.
+	// One-time hint: CloakBrowser gives 26/31 anti-bot bypass vs 24/31 baseline.
+	if (!cloakbrowserHintShown) {
+		cloakbrowserHintShown = true;
+		console.error("[pi-wf] CloakBrowser not installed — falling back to Playwright (JS stealth).");
+		console.error("[pi-wf]   For C++-level stealth: npm install cloakbrowser playwright-core");
+	}
 	const pw = await loadPlaywright();
 	if (!pw) return null;
 
