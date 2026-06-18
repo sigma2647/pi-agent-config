@@ -64,13 +64,17 @@ export async function extractWithDefuddle(
 
 		// Silence noisy "Failed to parse URL" warnings from defuddle's metadata
 		// extractor (it often trips on relative canonical links).
-		const originalWarn = console.warn;
-		console.warn = (...args: any[]) => {
-			if (typeof args[0] === "string" && args[0].includes("Failed to parse URL:")) return;
-			originalWarn(...args);
+		// Use a re-entrant guard so two concurrent extractions don't interfere.
+		let suppressed = false;
+		let savedWarn = console.warn;
+		const filter = (...args: any[]) => {
+			if (suppressed && typeof args[0] === "string" && args[0].includes("Failed to parse URL:")) return;
+			savedWarn(...args);
 		};
+		console.warn = filter;
 
 		try {
+			suppressed = true;
 			// Try to assist the extractor by making the canonical link absolute
 			// if it exists and is relative.
 			const canonical = document.querySelector('link[rel="canonical"]');
@@ -101,7 +105,8 @@ export async function extractWithDefuddle(
 				error: null,
 			};
 		} finally {
-			console.warn = originalWarn;
+			suppressed = false;
+			console.warn = savedWarn;
 		}
 	} catch (e) {
 		// FetchContext carries no debug flag; gate on the env var directly

@@ -3,14 +3,7 @@
 import { spawn } from "node:child_process";
 import { loadPlaywright, decodeBingUrl } from "../../_common/playwright-utils.ts";
 import type { Backend, SearchResult } from "./types.ts";
-
-async function which(cmd: string): Promise<boolean> {
-  return await new Promise((resolve) => {
-    const p = spawn("sh", ["-c", `command -v ${cmd}`], { stdio: "ignore" });
-    p.once("exit", (code) => resolve(code === 0));
-    p.once("error", () => resolve(false));
-  });
-}
+import { which } from "../../_common/tools/cli-helpers.ts";
 
 function getCdpUrl(): string {
   return process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
@@ -122,6 +115,10 @@ items = js("""
 print("__RESULTS_JSON__" + json.dumps(items))
 `;
 
+// Cap stdout at 1 MB — harness output should never exceed this for a
+// single search page; larger output signals garbage or a runaway script.
+const MAX_STDOUT = 1 * 1024 * 1024;
+
 function runHarness(query: string, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn("browser-harness", [], {
@@ -129,7 +126,17 @@ function runHarness(query: string, signal: AbortSignal): Promise<string> {
     });
     let stdout = "";
     let stderr = "";
-    proc.stdout.on("data", (b: Buffer) => (stdout += b.toString()));
+    let overflow = false;
+    proc.stdout.on("data", (b: Buffer) => {
+      if (overflow) return;
+      if (stdout.length + b.length > MAX_STDOUT) {
+        overflow = true;
+        proc.kill("SIGTERM");
+        setTimeout(() => proc.kill("SIGKILL"), 500).unref();
+        return;
+      }
+      stdout += b.toString();
+    });
     proc.stderr.on("data", (b: Buffer) => (stderr += b.toString()));
 
     const onAbort = () => {
@@ -146,6 +153,7 @@ function runHarness(query: string, signal: AbortSignal): Promise<string> {
     proc.once("exit", (code) => {
       signal.removeEventListener("abort", onAbort);
       if (signal.aborted) return reject(new Error("aborted"));
+      if (overflow) return reject(new Error("harness output exceeded 1 MB limit"));
       if (code !== 0) {
         return reject(new Error(stderr.trim() || `harness exit ${code}`));
       }

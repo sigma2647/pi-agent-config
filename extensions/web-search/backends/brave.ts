@@ -1,7 +1,9 @@
 // backends/brave.ts
 
 import { createRequire } from "node:module";
+import { connect } from "node:net";
 import type { Backend, SearchResult } from "./types.ts";
+import { getGlobalNpmRoot } from "../../_common/playwright-utils.ts";
 
 type BraveResponse = {
   web?: {
@@ -28,6 +30,8 @@ let cachedDispatcher: Cached | null = null;
 
 // Default proxy assumed available on the local box (Clash/V2Ray on 7890).
 // Set PI_WEB_SEARCH_PROXY="" (empty string) to explicitly disable proxying.
+// Before falling back to this default we probe the port; if unreachable we
+// skip proxying instead of waiting 4s for a timeout on every search.
 const DEFAULT_PROXY = "http://127.0.0.1:7890";
 
 function getProxyUrl(): string | undefined {
@@ -48,21 +52,53 @@ function getProxyUrl(): string | undefined {
   return DEFAULT_PROXY;
 }
 
+/** Quick TCP probe — resolves in ≤200ms. */
+function probeTcpFast(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = connect({ host, port });
+    const t = setTimeout(() => { sock.destroy(); resolve(false); }, 200);
+    sock.once("connect", () => { clearTimeout(t); sock.end(); resolve(true); });
+    sock.once("error", () => { clearTimeout(t); resolve(false); });
+  });
+}
+
+let defaultProxyProbed = false;
+let defaultProxyAlive = false;
+
+async function resolveDefaultProxy(): Promise<string | undefined> {
+  if (!defaultProxyProbed) {
+    try {
+      const u = new URL(DEFAULT_PROXY);
+      defaultProxyAlive = await probeTcpFast(u.hostname, Number(u.port) || 7890);
+    } catch {
+      defaultProxyAlive = false;
+    }
+    defaultProxyProbed = true;
+  }
+  return defaultProxyAlive ? DEFAULT_PROXY : undefined;
+}
+
 // Candidate locations where undici may live when pi loads us via jiti.
 // jiti's module resolution starts from the extension dir, which has no
 // node_modules; we have to reach into pi's own bundled deps.
-const UNDICI_CANDIDATES = [
+// System-wide paths are static; user-home and npm-global are resolved
+// dynamically so this works across machines without hardcoding $HOME.
+const SYSTEM_UNDICI_CANDIDATES = [
   "undici",
   "/usr/lib/node_modules/undici",
   "/usr/local/lib/node_modules/undici",
-  "/home/lawrence/.volta/tools/image/packages/@earendil-works/pi-coding-agent/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/undici",
 ];
 
-const REQUIRE_BASES = [
-  "/home/lawrence/.volta/tools/image/packages/@earendil-works/pi-coding-agent/lib/node_modules/@earendil-works/pi-coding-agent/",
+const SYSTEM_REQUIRE_BASES = [
   "/usr/lib/node_modules/",
   "/usr/local/lib/node_modules/",
 ];
+
+function homeCandidate(suffix: string): string | null {
+  const home = process.env.HOME;
+  if (!home) return null;
+  return `${home}/${suffix}`;
+}
 
 type UndiciExports = {
   ProxyAgent: new (url: string) => unknown;
@@ -79,7 +115,8 @@ function pickUndici(m: any): UndiciExports | null {
 }
 
 async function loadUndici(): Promise<UndiciExports | null> {
-  for (const spec of UNDICI_CANDIDATES) {
+  // Phase 1: static system paths + bare module name
+  for (const spec of SYSTEM_UNDICI_CANDIDATES) {
     try {
       const u = pickUndici(await import(spec));
       if (u) return u;
@@ -87,7 +124,36 @@ async function loadUndici(): Promise<UndiciExports | null> {
       /* try next */
     }
   }
-  for (const base of REQUIRE_BASES) {
+
+  // Phase 2: dynamic user-home paths (Volta, nvm, etc.)
+  const dynamicCandidates: string[] = [];
+  const home = process.env.HOME;
+  if (home) {
+    // Volta
+    dynamicCandidates.push(
+      `${home}/.volta/tools/image/packages/@earendil-works/pi-coding-agent/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/undici`,
+    );
+  }
+  for (const spec of dynamicCandidates) {
+    try {
+      const u = pickUndici(await import(spec));
+      if (u) return u;
+    } catch {
+      /* try next */
+    }
+  }
+
+  // Phase 3: npm global root
+  const npmRoot = await getGlobalNpmRoot();
+  const requireBases = [...SYSTEM_REQUIRE_BASES];
+  if (npmRoot) requireBases.unshift(npmRoot + "/");
+  // User-home require bases
+  if (home) {
+    const voltaBase = homeCandidate(".volta/tools/image/packages/@earendil-works/pi-coding-agent/lib/node_modules/@earendil-works/pi-coding-agent/");
+    if (voltaBase) requireBases.unshift(voltaBase);
+  }
+
+  for (const base of requireBases) {
     try {
       const req = createRequire(base);
       const resolved = req.resolve("undici");
@@ -97,6 +163,7 @@ async function loadUndici(): Promise<UndiciExports | null> {
       /* try next */
     }
   }
+
   return null;
 }
 
@@ -105,9 +172,15 @@ async function getProxyFetch(override?: string): Promise<{
   dispatcher: unknown | undefined;
 }> {
   // Precedence: explicit `override` (per-call --proxy or tool param) →
-  // env-based getProxyUrl() → DEFAULT_PROXY. `override === ""` is an
-  // explicit per-call disable, distinct from `undefined` (no override).
-  const url = override !== undefined ? (override || undefined) : getProxyUrl();
+  // env-based getProxyUrl() → DEFAULT_PROXY (with port probe).
+  // `override === ""` is an explicit per-call disable, distinct from `undefined`.
+  let rawUrl = override !== undefined ? (override || undefined) : getProxyUrl();
+  // When falling back to DEFAULT_PROXY, probe first — skip proxy if Clash
+  // isn't listening (avoids 4s timeout on machines without a local proxy).
+  if (rawUrl === DEFAULT_PROXY) {
+    rawUrl = await resolveDefaultProxy();
+  }
+  const url = rawUrl;
   if (!url) return { fetchFn: fetch, dispatcher: undefined };
   if (cachedDispatcher && cachedDispatcher.url === url) {
     return {

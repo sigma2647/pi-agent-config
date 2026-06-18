@@ -29,7 +29,13 @@ export default function (pi: ExtensionAPI) {
 			const result = await fetchAndExtract(params.url, signal, { proxy: params.proxy });
 
 			if (result.error) {
-				throw new Error(`${params.url}: ${result.error}`);
+				// Return as content rather than throwing — the agent can read the
+				// error and try a different URL. Throwing looks like a tool crash
+				// and blocks agent-level recovery.
+				return {
+					content: [{ type: "text" as const, text: `⚠️ Could not fetch ${params.url}: ${result.error}` }],
+					details: { url: params.url, error: result.error },
+				};
 			}
 
 			const header = result.title

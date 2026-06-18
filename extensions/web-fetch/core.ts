@@ -526,7 +526,7 @@ const STEALTH_SCRIPT = `
 // Hosts that always block anonymous server-side fetches — we auto-enable the
 // Playwright fallback for these without requiring PI_WF_PLAYWRIGHT=1. The user
 // still has to do a one-time `pi-wf --login <url>` to seed cookies.
-const PLAYWRIGHT_AUTO_HOSTS = /(?:^|\.)(zhihu|weibo|xiaohongshu)\.com$/i;
+const PLAYWRIGHT_AUTO_HOSTS = /(?:^|\.)(zhihu|weibo|xiaohongshu|bilibili|csdn|juejin)\.(?:com|cn|net)$/i;
 
 function playwrightWantedFor(url: string): boolean {
 	if (process.env.PI_WF_PLAYWRIGHT === "0") return false;

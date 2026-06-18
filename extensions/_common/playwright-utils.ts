@@ -18,7 +18,7 @@ const STATIC_CANDIDATES = [
 	"/usr/local/lib/node_modules/playwright-core",
 ];
 
-async function getGlobalNpmRoot(): Promise<string | null> {
+export async function getGlobalNpmRoot(): Promise<string | null> {
 	try {
 		const { stdout } = await execFileP("npm", ["root", "-g"], { timeout: 2000 });
 		return stdout.trim() || null;
