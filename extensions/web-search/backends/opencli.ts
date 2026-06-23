@@ -1,6 +1,10 @@
 // backends/opencli.ts
 
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { connect } from "node:net";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { homedir } from "node:os";
 import type { Backend, SearchResult } from "./types.ts";
 import { which } from "../../_common/tools/cli-helpers.ts";
 
@@ -139,12 +143,34 @@ export const opencliBackend: Backend = {
 
   async isAvailable() {
     if (!(await which("opencli"))) return false;
-    // Do not run `opencli doctor` here — daemon-offline still leaves the CLI
-    // usable; the actual availability is decided by the search() call.
+    // opencli talks to its own daemon (default port 19825). If the daemon
+    // isn't listening, skip instantly — no amount of waiting will help.
+    const port = Number(process.env.OPENCLI_DAEMON_PORT) || 19825;
+    const tcpOk = await new Promise<boolean>((resolve) => {
+      const sock = connect({ host: "127.0.0.1", port });
+      const t = setTimeout(() => { sock.destroy(); resolve(false); }, 300);
+      sock.once("connect", () => { clearTimeout(t); sock.end(); resolve(true); });
+      sock.once("error", () => { clearTimeout(t); resolve(false); });
+    });
+    if (!tcpOk) return false;
+    // Daemon is listening. The extension may be disconnected, but
+    // search() will attempt to wake it — don't skip here.
     return true;
   },
 
   async search(query, signal, opts) {
+    // Auto-wake: if the daemon is running but the extension is disconnected,
+    // launch headed Chromium with the unpacked extension. Falls through to
+    // adapter search if wakeup succeeds (or extension was already connected).
+    const woke = await wakeOpencli();
+    if (!woke) {
+      throw new Error(
+        "opencli Browser Bridge extension not connected. " +
+        "Install the extension from https://github.com/jackwener/opencli/releases " +
+        "or run Chromium with --remote-debugging-port."
+      );
+    }
+
     const adapters = getAdapters();
     const errors: string[] = [];
     for (const a of adapters) {
@@ -161,3 +187,73 @@ export const opencliBackend: Backend = {
     throw new Error(`opencli adapters exhausted: ${errors.join("; ")}`);
   },
 };
+
+// ── Auto-wake: launch Chromium for the Browser Bridge extension ────────
+// The opencli daemon (port 19825) needs a headed Chromium instance with the
+// Browser Bridge extension loaded. If no such Chrome is running, opencli
+// commands hang until timeout. This section auto-launches one.
+
+const CHROMIUM_BIN = process.env.OPENCLI_CHROMIUM_BIN || "chromium";
+const DEFAULT_PROFILE = path.join(homedir(), ".config", "chromium");
+const OPENCLI_CDP_PORT = 19826;
+const WAKE_TIMEOUT_S = 10;
+
+function findExtensionDir(): string | null {
+  const unpackedRoot = path.join(DEFAULT_PROFILE, "Default", "UnpackedExtensions");
+  try {
+    for (const entry of fs.readdirSync(unpackedRoot)) {
+      if (!entry.startsWith("opencli-extension-")) continue;
+      const manifestPath = path.join(unpackedRoot, entry, "manifest.json");
+      if (fs.existsSync(manifestPath)) return path.join(unpackedRoot, entry);
+    }
+  } catch {}
+  return null;
+}
+
+function daemonExtensionConnected(): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("opencli", ["daemon", "status"], { timeout: 5000 }, (err, stdout) => {
+      if (err) return resolve(false);
+      resolve(!stdout.includes("Extension: disconnected"));
+    });
+  });
+}
+
+async function killOpencliChrome(): Promise<void> {
+  try {
+    const r = await fetch(`http://127.0.0.1:${OPENCLI_CDP_PORT}/json/version`);
+    if (!r.ok) return;
+    const listR = await fetch(`http://127.0.0.1:${OPENCLI_CDP_PORT}/json/list`);
+    const pages = (await listR.json()) as Array<{ id: string }>;
+    for (const p of pages) {
+      await fetch(`http://127.0.0.1:${OPENCLI_CDP_PORT}/json/close/${p.id}`).catch(() => {});
+    }
+  } catch {}
+}
+
+async function wakeOpencli(): Promise<boolean> {
+  if (await daemonExtensionConnected()) return true;
+  const extDir = findExtensionDir();
+  if (!extDir) return false;
+  await killOpencliChrome();
+
+  const proc = spawn(CHROMIUM_BIN, [
+    `--remote-debugging-port=${OPENCLI_CDP_PORT}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${DEFAULT_PROFILE}`,
+    `--load-extension=${extDir}`,
+    "--disable-session-crashed-bubble",
+    "--disable-infobars",
+    "about:blank",
+    "--keep-alive-for-testing",
+  ], { detached: true, stdio: "ignore" });
+  proc.unref();
+
+  const deadline = Date.now() + WAKE_TIMEOUT_S * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await daemonExtensionConnected()) return true;
+  }
+  return false;
+}

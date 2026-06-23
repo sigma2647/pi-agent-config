@@ -18,12 +18,16 @@ extensions/
 ├── install.sh           ← unified installer (manifest-driven)
 ├── web-fetch/           ← single-URL fetch + extract → markdown        (pi-wf)
 │   ├── core.ts          ← orchestrator + fallback chain
+│   ├── storage.ts       ← in-memory truncated-content store for retrieval
 │   ├── extractors/      ← one file per site (bilibili/github/HN/reddit/wechat)
+│   ├── engines/         ← extraction engines (defuddle/readability/jina/playwright/pdf)
 │   └── tests/stress.sh  ← 3-phase smoke test (coverage / concurrency / edge)
 ├── web-search/          ← multi-backend search                          (pi-ws)
 │   ├── chain.ts         ← backend registry + chain dispatcher
-│   └── backends/        ← one file per source (brave/opencli/browser)
-└── subagents/           ← subagent definitions
+│   ├── validate.ts      ← relevance filtering (keyword-match results against query)
+│   └── backends/        ← one file per source (brave/exa/opencli/browser)
+├── subagents/           ← subagent definitions (scout/researcher/worker)
+└── _common/             ← shared utilities (playwright resolver, CLI helpers)
 ```
 
 ## CLI install workflow
@@ -57,7 +61,7 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **web-fetch** (per URL): `domain extractor → defuddle (lib) → http+Readability → Jina Reader → Playwright (gated)`. **Defuddle is the default primary extractor** as of late May 2026 — cleaner Pandoc footnotes (`[^N]:` + matching `[^N]` inline anchors in body text), schema.org metadata (`> 作者: ... · 发布: ... · 字数: ...`), and more complete section structure (`## 概要 / ## 官方年表` etc. that Readability would discard via low-score pruning). Trade-off vs Readability: ~260ms slower but dramatically friendlier for LLM consumption. Opt out per-call with `pi-wf --no-defuddle <url>` or globally with `PI_WF_PREFER_DEFUDDLE=0`. `--defuddle` is kept as a no-op alias. defuddle is the `defuddle/node` library, NOT the CLI — see Gotchas.
 
-**web-search** (per query): `brave → opencli → browser`, stops at the first non-empty backend — **by design**. The three are a primary (`brave`) + fallbacks (`opencli`/`browser`), not peer-quality engines, so fan-out + RRF merge (which only pays off across genuinely complementary engines, e.g. SearXNG's 70) would add latency + noise for little breadth — **don't add it**; a fan-out attempt was reverted for this reason. Per-call `pi-ws --fast` (tool param `fast: true`) queries only the first backend and fails fast — skips the slow `opencli`/`browser` fallbacks. CLI default output is JSON (matches the `web_search` agent tool's payload — same shape, easy to pipe to `jq`). Opt out per-call with `pi-ws --human` or `--format human`, globally with `PI_WS_FORMAT=human`. Unknown `--flags` are hard errors (used to silently get appended to the query). Per-call `--proxy <url>` plumbs into `Backend.search(query, signal, opts?: SearchOptions)` via `runChain` — honored by `brave` (overrides env-based detection); `opencli` inherits env (subprocess); `browser` (CDP) connects to a pre-launched Chromium whose proxy is fixed and ignores per-call override. Third parties can register backends via `import { registerBackend } from "<this-extension>"` (the registry + `Backend` / `SearchOptions` types are re-exported from `index.ts`).
+**web-search** (per query): `brave → opencli → browser`, stops at the first non-empty backend — **by design**. The three are a primary (`brave`) + fallbacks (`opencli`/`browser`), not peer-quality engines, so fan-out + RRF merge (which only pays off across genuinely complementary engines, e.g. SearXNG's 70) would add latency + noise for little breadth — **don't add it**; a fan-out attempt was reverted for this reason. Exa is registered as a fourth backend (`exaBackend`) but NOT in the default chain — use `PI_WEB_SEARCH_CHAIN` or `--chain exa` to activate it. Per-call `pi-ws --fast` (tool param `fast: true`) queries only the first backend in the chain and fails fast — skips the slow `opencli`/`browser` fallbacks. CLI default output is JSON (matches the `web_search` agent tool's payload — same shape, easy to pipe to `jq`). Opt out per-call with `pi-ws --human` or `--format human`, globally with `PI_WS_FORMAT=human`. Unknown `--flags` are hard errors (used to silently get appended to the query). Per-call `--proxy <url>` plumbs into `Backend.search(query, signal, opts?: SearchOptions)` via `runChain` — honored by `brave` (overrides env-based detection); `opencli` inherits env (subprocess); `browser` (CDP) connects to a pre-launched Chromium whose proxy is fixed and ignores per-call override. Third parties can register backends via `import { registerBackend } from "<this-extension>"` (the registry + `Backend` / `SearchOptions` types are re-exported from `index.ts`).
 
 **`web_search` is general-web only — site-scoped search lives in opencli, not in the chain.** Keyword→list *within a single site* (B站视频/知乎/微博/YouTube/arXiv/BOSS直聘 …) is a different capability than the interchangeable general engines in the `brave → opencli → browser` chain — registering a site-scoped backend there would pollute generic queries (chain stops at first non-empty). opencli already ships these adapters (`opencli list` → e.g. `opencli bilibili search "<kw>" -f json`), and the bilibili **fetch** extractor handles the BV→content half. The agent's discovery gap (it reaches for `web_search` not knowing opencli site-search exists) is closed by a pointer in `web_search`'s `description` + `promptGuidelines` in `web-search/index.ts` — pure text, no routing code, no domain list (points at `opencli list` instead). Do NOT add a bilibili (or any site-scoped) backend to the chain; extend the guideline pointer instead.
 
@@ -73,8 +77,51 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 - **Zhihu blocks all anonymous server-side fetches** (HTML and API; Jina too). Only working path: `pi-wf --login https://www.zhihu.com` once, then `pi-wf --playwright` reuses cookies in `~/.pw-capture-profile`.
 - **`npm i -g playwright` does NOT make `import("playwright")` work.** Node's ESM resolver walks up from the script's `node_modules`; it never checks npm's global prefix or `/usr/lib/node_modules`. Always go through `playwright.ts:loadPlaywright()` which probes the known distro/system paths and uses `createRequire` as a fallback. For Arch users: `sudo pacman -S playwright` installs to `/usr/lib/node_modules/playwright` and is already in the probe list.
 - **gh CLI**: `gh auth status --no-refresh` flag was removed; use plain `gh auth status`. Always invoke via `execFile(['gh', ...args])` with argv, never shell strings — URL path segments can contain `;`/`$`/spaces.
+- **opencli Browser Bridge 扩展更新 SOP**: opencli CLI 提示 `Extension update available` 时，Chrome 扩展需要手动跟进更新。下面是 agent 可执行的 7 步流程（也适合脚本化）：
+
+  1. **定位扩展目录** — Chrome 的 UnpackedExtensions 目录名带随机后缀，不能硬编码：
+     ```bash
+     EXT_DIR=$(find ~/.config/chromium -path '*/UnpackedExtensions/*opencli*' -maxdepth 5 -type d 2>/dev/null | head -1)
+     ```
+     如果 find 找不到，备选路径是 `~/.config/google-chrome/...` 或 `~/.config/brave/...`，检查当前活跃浏览器再搜。
+
+  2. **读当前版本**：
+     ```bash
+     CURRENT=$(grep -oP '"version"\s*:\s*"\K[^"]+' "$EXT_DIR/manifest.json")
+     echo "current: $CURRENT"
+     ```
+
+  3. **查最新扩展版本** — GitHub Release 的 tag 格式是 `extension-vX.Y.Z`：
+     ```bash
+     LATEST_TAG=$(gh release list --repo jackwener/opencli --json tagName --jq '.[].tagName' | grep '^extension-' | head -1)
+     LATEST_VER=${LATEST_TAG#extension-v}
+     echo "latest: $LATEST_VER"
+     ```
+     备选：如果 `gh` 不可用或未登录，从 `opencli` 输出中 grep `Extension update available: vX → vY`。
+
+  4. **比较版本** — 如果已是最新则退出。
+
+  5. **下载 zip**：
+     ```bash
+     gh release download "$LATEST_TAG" --repo jackwener/opencli --pattern 'opencli-extension-*.zip' --dir /tmp
+     ```
+     zip 名固定为 `opencli-extension-vX.Y.Z.zip`，对应 `LATEST_TAG`。
+
+  6. **替换文件**（原地替换，不改变目录名——Chrome 用路径 ID 识别扩展，目录名含旧版本号也无所谓）：
+     ```bash
+     ZIP_FILE="/tmp/opencli-extension-$LATEST_VER.zip"
+     rm -rf "$EXT_DIR" && unzip -o "$ZIP_FILE" -d "$EXT_DIR" && rm -f "$ZIP_FILE"
+     ```
+     验证：`grep '"version"' "$EXT_DIR/manifest.json"` 应为 `LATEST_VER`。
+
+  7. **通知用户** — 扩展文件已替换，但 Chrome 不会自动 reload。让用户去 `chrome://extensions` 点 OpenCLI Browser Bridge 卡片上的 ↻ 刷新图标。
+
+  注意：此流程假设 `gh` CLI 已登录。如果未登录（`gh auth status` 报错），走备选：用浏览器打开 `https://github.com/jackwener/opencli/releases/latest` 手动下载，再执行步骤 1→2→6。
 - **`new Date(ts * 1000).toISOString()` throws on invalid `ts`.** Wrap in `safeDate()` (already in bilibili/zhihu extractors) when handling external API timestamps.
 - **Don't read browser profile Cookies SQLite directly.** Use Playwright with `launchPersistentContext` so cookies load natively + transparently.
+- **OpenCLI auto-wake** — when the opencli backend detects the daemon running but the Browser Bridge extension disconnected, it auto-launches headed Chromium with `--load-extension=<unpacked-dir>` on port 19826 and polls `opencli daemon status` for up to 10s. Code is inline in `backends/opencli.ts` (wake functions below the exported backend).
+- **Web-fetch truncation + retrieval (`storage.ts`)** — pages >30KB are truncated in the tool response and the full content stored in-memory (30-min TTL, pruned on `session_start`). The truncated output includes a `retrieveId` the agent can pass as `web_fetch({ retrieve: "<id>" })` to get the full document without re-fetching. No disk I/O, no session persistence — lives only as long as the pi process.
+- **Exa backend (`backends/exa.ts`)** — registered but NOT in the default chain. Requires `EXA_SEARCH_API_KEY`. Semantically-driven search (neural embeddings + keyword fusion), ~2.4x slower than Brave, higher noise rate on technical queries. Use via `--chain exa` or `PI_WEB_SEARCH_CHAIN=brave,exa,...`.
 
 ## Environment
 

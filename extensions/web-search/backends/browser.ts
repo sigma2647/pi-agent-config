@@ -5,28 +5,19 @@ import { loadPlaywright, decodeBingUrl } from "../../_common/playwright-utils.ts
 import type { Backend, SearchResult } from "./types.ts";
 import { which } from "../../_common/tools/cli-helpers.ts";
 
-function getCdpUrl(): string {
-  return process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
+// ── CDP utilities ──────────────────────────────────────────────────────
+
+const CDP_BASE = process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
+
+function getHostname(): string {
+  try { return new URL(CDP_BASE).hostname; }
+  catch { return "127.0.0.1"; }
 }
 
-// CDP is always a local debugging endpoint, so it must never be routed through
-// HTTP(S)_PROXY. With NODE_USE_ENV_PROXY=1 (our shebang) undici otherwise sends
-// `http://127.0.0.1:9222` straight into Clash, which drops it ("other side
-// closed") — making the whole playwright/CDP path dead whenever a proxy is set.
-// undici re-reads NO_PROXY per request, so appending the CDP host (idempotent)
-// is enough. Cheaper + more robust than a no-proxy dispatcher, which would need
-// brave.ts's undici-resolution dance and can throw UND_ERR_INVALID_ARG across
-// undici instances.
 function ensureCdpNoProxy(): void {
-  let host = "127.0.0.1";
-  try {
-    host = new URL(getCdpUrl()).hostname;
-  } catch {
-    /* keep default */
-  }
   for (const key of ["NO_PROXY", "no_proxy"]) {
     const cur = (process.env[key] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    for (const h of [host, "127.0.0.1", "localhost"]) {
+    for (const h of [getHostname(), "127.0.0.1", "localhost"]) {
       if (!cur.includes(h)) cur.push(h);
     }
     process.env[key] = cur.join(",");
@@ -34,14 +25,13 @@ function ensureCdpNoProxy(): void {
 }
 
 async function isCdpReachable(signal?: AbortSignal): Promise<boolean> {
-  const base = getCdpUrl();
   ensureCdpNoProxy();
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 1000);
   const fwd = () => ctl.abort();
   signal?.addEventListener("abort", fwd, { once: true });
   try {
-    const r = await fetch(`${base}/json/version`, { signal: ctl.signal });
+    const r = await fetch(`${CDP_BASE}/json/version`, { signal: ctl.signal });
     return r.ok;
   } catch {
     return false;
@@ -49,6 +39,10 @@ async function isCdpReachable(signal?: AbortSignal): Promise<boolean> {
     clearTimeout(t);
     signal?.removeEventListener("abort", fwd);
   }
+}
+
+function getCdpUrl(): string {
+  return CDP_BASE;
 }
 
 type PickedBackend = "harness" | "playwright" | "none";

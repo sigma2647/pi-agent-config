@@ -3,6 +3,7 @@
 import type { Backend, BackendAttempt, SearchResult } from "./backends/types.ts";
 import { filterRelevant } from "./validate.ts";
 import { braveBackend } from "./backends/brave.ts";
+import { exaBackend } from "./backends/exa.ts";
 import { opencliBackend } from "./backends/opencli.ts";
 import { browserBackend } from "./backends/browser.ts";
 
@@ -18,6 +19,7 @@ export function registerBackend(b: Backend): void {
 // — re-registering the same name just overwrites.
 export function registerDefaultBackends(): void {
   registerBackend(braveBackend);
+  registerBackend(exaBackend);
   registerBackend(opencliBackend);
   registerBackend(browserBackend);
 }
@@ -34,11 +36,12 @@ export type ChainConfig = {
 
 const DEFAULT_TIMEOUTS: Record<string, number> = {
   brave: 4000,
-  opencli: 6000,
+  exa: 5000,
+  opencli: 20000,
   browser: 10000,
 };
 
-const DEFAULT_TOTAL_TIMEOUT_MS = 15000;
+const DEFAULT_TOTAL_TIMEOUT_MS = 25000;
 const DEFAULT_CHAIN = ["brave", "opencli", "browser"];
 
 // Single source of truth for the one user-facing chain knob. Both entry points
