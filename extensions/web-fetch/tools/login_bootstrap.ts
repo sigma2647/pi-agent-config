@@ -14,8 +14,8 @@
 //   ./tools/login_bootstrap.ts <url> # direct
 
 import readline from "node:readline";
-import { loadCloakBrowser } from "../cloakbrowser.ts";
-import { loadPlaywright, getPlaywrightExecutablePath, playwrightInstallHint } from "../playwright.ts";
+import { loadCloakBrowser } from "../engines/cloakbrowser.ts";
+import { loadPlaywright, getPlaywrightExecutablePath, playwrightInstallHint } from "../engines/playwright.ts";
 
 const UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";

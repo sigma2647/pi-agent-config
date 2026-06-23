@@ -6,8 +6,8 @@
 // that improves the library's extraction success rate.
 
 import { parseHTML } from "linkedom";
-import type { FetchContext, FetchResult } from "./core.ts";
-import { BROWSER_HEADERS } from "./core.ts";
+import type { FetchContext, FetchResult } from "../core.ts";
+import { BROWSER_HEADERS } from "../core.ts";
 
 type DefuddleFn = (
 	input: any, // Document | string
