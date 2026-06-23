@@ -27,6 +27,11 @@ export const BROWSER_HEADERS = {
 } as const;
 export const MIN_USEFUL_CONTENT = 500;
 
+/** Threshold above which single-URL fetches are truncated and stored for
+ *  later retrieval. Matches pi-web-access's 30 KB — large enough that most
+ *  docs/blog-posts fit inline, small enough to avoid context-window bloat. */
+export const TRUNCATION_THRESHOLD = 30_000;
+
 // ── Fetch execution context ───────────────────────────────────────────
 // Every extraction engine, every domain extractor takes a FetchContext
 // instead of `(url, signal, proxy?, ...)`. Adding a new per-request option
