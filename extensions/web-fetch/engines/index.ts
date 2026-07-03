@@ -5,5 +5,6 @@ export { extractWithDefuddle } from "./defuddle.ts";
 export { extractViaHttp, extractHeadingTitle, htmlToMarkdown } from "./readability.ts";
 export { extractWithJinaReader } from "./jina.ts";
 export { extractWithPlaywright, PLAYWRIGHT_AUTO_HOSTS } from "./playwright.ts";
+export { extractWithBrowserProbe } from "./browser-probe.ts";
 export { isPDF, extractPDF } from "./pdf.ts";
 export { loadCloakBrowser, cloakbrowserInstallHint } from "./cloakbrowser.ts";

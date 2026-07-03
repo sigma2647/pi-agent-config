@@ -7,6 +7,7 @@ import { extractWithDefuddle } from "./engines/defuddle.ts";
 import { extractViaHttp } from "./engines/readability.ts";
 import { extractWithJinaReader } from "./engines/jina.ts";
 import { extractWithPlaywright, PLAYWRIGHT_AUTO_HOSTS } from "./engines/playwright.ts";
+import { extractWithBrowserProbe } from "./engines/browser-probe.ts";
 
 const USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -214,6 +215,14 @@ export async function fetchAndExtract(
 	if (jinaResult) {
 		log("→ returning: jina-reader");
 		return jinaResult;
+	}
+	if (signal?.aborted)
+		return { url, title: "", content: "", error: "Aborted" };
+
+	const browserProbeResult = await time("browser-probe", () => extractWithBrowserProbe(ctx));
+	if (browserProbeResult) {
+		log("→ returning: browser-probe");
+		return browserProbeResult;
 	}
 	if (signal?.aborted)
 		return { url, title: "", content: "", error: "Aborted" };
