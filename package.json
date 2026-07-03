@@ -2,6 +2,9 @@
   "name": "pi-agent-config",
   "version": "0.0.1",
   "private": true,
+  "scripts": {
+    "postinstall": "npm install --prefix extensions/web-fetch"
+  },
   "pi": {
     "extensions": ["./extensions/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents"],
     "skills": ["./skills"],

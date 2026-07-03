@@ -77,6 +77,16 @@ async function ghApi<T = unknown>(
 	}
 }
 
+/**
+ * Like `ghApi` but returns the raw response string without JSON.parse.
+ */
+async function ghApiRaw(
+	endpoint: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
+	return ghRun(["api", endpoint], signal);
+}
+
 // ── REST API types (minimal) ───────────────────────────────────────────
 
 interface GhRepo {
@@ -181,7 +191,10 @@ async function extractRepo(
 	if (repoData.homepage) lines.push(`> Homepage: ${repoData.homepage}`);
 	lines.push("", "---", "");
 
-	const readme = await fetchJson<GhReadme>(
+	const readme = await ghApi<GhReadme>(
+		`repos/${fullName}/readme`,
+		signal,
+	) ?? await fetchJson<GhReadme>(
 		ctx,
 		`https://api.github.com/repos/${fullName}/readme`,
 	);
