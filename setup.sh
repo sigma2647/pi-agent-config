@@ -212,6 +212,23 @@ main() {
     fi
   fi
 
+  # 3.5 扩展子目录依赖 (各自有 package.json)
+  if [ -d "$REPO_DIR/extensions" ]; then
+    for ext_pkg in "$REPO_DIR"/extensions/*/package.json; do
+      [ -f "$ext_pkg" ] || continue
+      local ext_dir; ext_dir="$(dirname "$ext_pkg")"
+      # 有 dependencies 才装
+      if node -e "const p=require('$ext_pkg');process.exit(p.dependencies?0:1)" 2>/dev/null; then
+        info "安装扩展依赖: extensions/$(basename "$ext_dir")"
+        if [ "$DRY_RUN" = 1 ]; then
+          echo "${C_DIM}[dry-run] (cd $ext_dir && npm install --silent)${C_RST}"
+        else
+          (cd "$ext_dir" && npm install --silent)
+        fi
+      fi
+    done
+  fi
+
   # 4. settings.json 合并 (不 symlink)
   merge_settings
 
