@@ -91,10 +91,10 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
      echo "current: $CURRENT"
      ```
 
-  3. **查最新扩展版本** — GitHub Release 的 tag 格式是 `extension-vX.Y.Z`：
+  3. **查最新扩展版本** — GitHub Release 的 tag 格式是 `ext-vX.Y.Z`：
      ```bash
-     LATEST_TAG=$(gh release list --repo jackwener/opencli --json tagName --jq '.[].tagName' | grep '^extension-' | head -1)
-     LATEST_VER=${LATEST_TAG#extension-v}
+     LATEST_TAG=$(gh release list --repo jackwener/opencli --json tagName --jq '.[].tagName' | grep '^ext-v' | sort -V | tail -1)
+     LATEST_VER=${LATEST_TAG#ext-v}
      echo "latest: $LATEST_VER"
      ```
      备选：如果 `gh` 不可用或未登录，从 `opencli` 输出中 grep `Extension update available: vX → vY`。
@@ -105,7 +105,7 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
      ```bash
      gh release download "$LATEST_TAG" --repo jackwener/opencli --pattern 'opencli-extension-*.zip' --dir /tmp
      ```
-     zip 名固定为 `opencli-extension-vX.Y.Z.zip`，对应 `LATEST_TAG`。
+     假设 zip 名格式 `opencli-extension-vX.Y.Z.zip`（实际以 release asset 为准，`gh release download --pattern` 会自动匹配）。
 
   6. **替换文件**（原地替换，不改变目录名——Chrome 用路径 ID 识别扩展，目录名含旧版本号也无所谓）：
      ```bash

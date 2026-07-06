@@ -93,7 +93,7 @@ export async function runDoctor(): Promise<void> {
 	console.log(`    ${pad("harness", COL1-2)} ${harness ? OK : WARN}  ${harness ?? "(not on PATH)"}`);
 
 	if (!browserOk) {
-		const { isArchLinux } = await import("../_common/playwright-utils.ts");
+		const { isArchLinux } = await import("../../_common/playwright-utils.ts");
 		if (isArchLinux()) {
 			console.log(`    ${WARN} ${DIM}Suggestion: sudo pacman -S chromium${RESET}`);
 		}
