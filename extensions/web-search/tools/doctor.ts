@@ -105,7 +105,7 @@ export async function runDoctor(): Promise<void> {
 	const httpProxy = process.env.HTTP_PROXY ?? process.env.http_proxy ?? "";
 	const wsProxy = process.env.PI_WEB_SEARCH_PROXY;
 
-	if (wsProxy) console.log(`  ${pad("PI_WS_PROXY", COL1)} ${wsProxy}`);
+	if (wsProxy) console.log(`  ${pad("PI_WEB_SEARCH_PROXY", COL1)} ${wsProxy}`);
 	if (httpsProxy) console.log(`  ${pad("HTTPS_PROXY", COL1)} ${httpsProxy}`);
 	if (httpProxy) console.log(`  ${pad("HTTP_PROXY", COL1)} ${httpProxy}`);
 
@@ -122,7 +122,7 @@ export async function runDoctor(): Promise<void> {
 	// ── Output ──
 	section("Environment");
 	console.log(`  ${pad("PI_WS_FORMAT", COL1)} ${process.env.PI_WS_FORMAT ?? DIM + "(unset)" + RESET}`);
-	console.log(`  ${pad("PI_WS_CHAIN", COL1)} ${process.env.PI_WEB_SEARCH_CHAIN ?? DIM + "(unset)" + RESET}`);
+	console.log(`  ${pad("PI_WEB_SEARCH_CHAIN", COL1)} ${process.env.PI_WEB_SEARCH_CHAIN ?? DIM + "(unset)" + RESET}`);
 
 	// ── Setup Guide ──
 	section("New Device Setup");

@@ -51,8 +51,7 @@ function formatResults(backend: string, results: SearchResult[]): string {
 
 // JSON variant for the pi-internal tool call path. Agents handle structured
 // JSON more reliably than markdown lists, and snippets often contain markdown
-// bytes that confuse downstream parsers. Human surfaces (CLI default, /search
-// command) stay on `formatResults()`.
+// bytes that confuse downstream parsers. Human surfaces use `formatResults()`.
 function formatResultsJson(backend: string, results: SearchResult[]): string {
   return JSON.stringify({ ok: true, backend, count: results.length, results }, null, 2);
 }
@@ -205,17 +204,17 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("web-search", {
-    description: "Search the web (e.g. /search rust async tutorial)",
+    description: "Search the web (e.g. /web-search rust async tutorial)",
     handler: async (args, ctx) => {
       if (!args) {
-        ctx.ui.notify("Usage: /search <query>", "warning");
+        ctx.ui.notify("Usage: /web-search <query>", "warning");
         return;
       }
       const result = await runChain(args, ctx.signal ?? new AbortController().signal);
       const text =
         result.kind === "ok"
-          ? formatResultsJson(result.backend, result.results)
-          : formatFailureJson(args, result.attempts);
+          ? formatResults(result.backend, result.results)
+          : formatFailure(args, result.attempts);
 
       const truncation = truncateHead(text, {
         maxLines: DEFAULT_MAX_LINES,

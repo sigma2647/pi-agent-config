@@ -17,7 +17,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Fetch a single URL and return the full page as clean markdown — the right tool whenever you need to READ a page (docs, blog post, GitHub issue, PDF, API reference, news article, RFC). " +
 			"Pairs with web_search: search finds URLs, fetch reads them. " +
-			"Handles HTML (Readability/Defuddle), PDFs, plain text, and JS-rendered pages via Jina/Playwright fallback.",
+			"Handles HTML (Readability/Defuddle), PDFs, plain text, and JS-rendered pages via Jina/browser-probe/Playwright fallback.",
 		promptSnippet:
 			"Fetch a URL and extract its readable content as markdown.",
 		promptGuidelines: [
@@ -99,7 +99,7 @@ export default function (pi: ExtensionAPI) {
 				details: {
 					url: result.url,
 					title: result.title,
-					chars: result.content.length,
+					chars: fullText.length,
 					...(retrieveId ? { retrieveId, truncated: true } : {}),
 				},
 			};

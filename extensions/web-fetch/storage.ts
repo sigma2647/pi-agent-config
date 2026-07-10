@@ -19,6 +19,7 @@ interface Entry {
 const store = new Map<string, Entry>();
 
 export function storeContent(id: string, content: string): void {
+  pruneContent();
   store.set(id, { content, ts: Date.now() });
 }
 
