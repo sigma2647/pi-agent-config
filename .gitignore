@@ -8,5 +8,10 @@ cache/
 # Node modules in skills
 **/node_modules/
 
+# Local upstream/reference checkouts; the active extensions are versioned under
+# extensions/. See old/README.md before removing these local archives.
+old/pi-interactive-subagents-upstream/
+old/pi-interactive-subagents-agent-presets/
+
 # OS files
 .DS_Store

@@ -26,7 +26,11 @@ extensions/
 │   ├── chain.ts         ← backend registry + chain dispatcher
 │   ├── validate.ts      ← relevance filtering (keyword-match results against query)
 │   └── backends/        ← one file per source (brave/exa/opencli/browser)
-├── subagents/           ← subagent definitions (scout/researcher/worker)
+├── subagents/           ← active synchronous + visible-pane delegation
+│   ├── index.ts         ← tool/command registration and child orchestration
+│   ├── agents/          ← bundled definitions (scout/researcher/worker)
+│   ├── tools/           ← child-process helpers
+│   └── test/            ← focused Node smoke tests
 └── _common/             ← shared utilities (playwright resolver, CLI helpers)
 ```
 
@@ -64,6 +68,8 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 **web-search** (per query): `brave → opencli → browser`, stops at the first non-empty backend — **by design**. The three are a primary (`brave`) + fallbacks (`opencli`/`browser`), not peer-quality engines, so fan-out + RRF merge (which only pays off across genuinely complementary engines, e.g. SearXNG's 70) would add latency + noise for little breadth — **don't add it**; a fan-out attempt was reverted for this reason. Exa is registered as a fourth backend (`exaBackend`) but NOT in the default chain — use `PI_WEB_SEARCH_CHAIN` or `--chain exa` to activate it. Per-call `pi-ws --fast` (tool param `fast: true`) queries only the first backend in the chain and fails fast — skips the slow `opencli`/`browser` fallbacks. CLI default output is JSON (matches the `web_search` agent tool's payload — same shape, easy to pipe to `jq`). Opt out per-call with `pi-ws --human` or `--format human`, globally with `PI_WS_FORMAT=human`. Unknown `--flags` are hard errors (used to silently get appended to the query). Per-call `--proxy <url>` plumbs into `Backend.search(query, signal, opts?: SearchOptions)` via `runChain` — honored by `brave` (overrides env-based detection); `opencli` inherits env (subprocess); `browser` (CDP) connects to a pre-launched Chromium whose proxy is fixed and ignores per-call override. Third parties can register backends via `import { registerBackend } from "<this-extension>"` (the registry + `Backend` / `SearchOptions` types are re-exported from `index.ts`).
 
 **`web_search` is general-web only — site-scoped search lives in opencli, not in the chain.** Keyword→list *within a single site* (B站视频/知乎/微博/YouTube/arXiv/BOSS直聘 …) is a different capability than the interchangeable general engines in the `brave → opencli → browser` chain — registering a site-scoped backend there would pollute generic queries (chain stops at first non-empty). opencli already ships these adapters (`opencli list` → e.g. `opencli bilibili search "<kw>" -f json`), and the bilibili **fetch** extractor handles the BV→content half. The agent's discovery gap (it reaches for `web_search` not knowing opencli site-search exists) is closed by a pointer in `web_search`'s `description` + `promptGuidelines` in `web-search/index.ts` — pure text, no routing code, no domain list (points at `opencli list` instead). Do NOT add a bilibili (or any site-scoped) backend to the chain; extend the guideline pointer instead.
+
+**subagents keeps synchronous and visible execution separate.** `subagent` runs an isolated child and returns its result synchronously. `subagent_visible` returns immediately and runs Pi in a Herdr/tmux pane; definitions with `auto-exit: true` close after each non-interrupted autonomous turn, while interactive definitions stay open until the child calls `subagent_done` (the injected task prompt requires this on completion). The `interactive` tool parameter or frontmatter overrides that default. `subagent_interrupt` sends Escape without closing the pane. Visible children have a Ctrl+Shift+J tool-access widget plus `subagent_done` and `caller_ping`; either control signal closes the child, while a ping preserves its session and delivers a resumable path to the parent for `subagent_resume`. `subagents_list` discovers definitions with precedence `.pi/agents/` → `~/.pi/agent/agents/` → bundled. Supported frontmatter also includes `cwd`, `deny-tools`, `spawning`, `auto-exit`, `interactive`, and `disable-model-invocation`.
 
 ## Gotchas
 
@@ -133,7 +139,7 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 ## Testing
 
-`tests/stress.sh [phase1|phase2|phase3|all]` in web-fetch runs coverage / concurrency / edge cases. No formal test framework — smoke tests via the CLI binaries are the norm.
+`tests/stress.sh [phase1|phase2|phase3|all]` in web-fetch runs coverage / concurrency / edge cases. `npm run test:subagents` runs the subagent helper tests. No other formal test framework — smoke tests via the CLI binaries are the norm.
 
 ---
 
