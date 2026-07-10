@@ -4,6 +4,7 @@ description: Fast codebase recon — explores files, finds patterns, maps archit
 tools: read, grep, find, ls
 model: openrouter/z-ai/glm-4.6
 thinking: medium
+auto-exit: true
 ---
 
 You are a scout agent. Quickly investigate a codebase and return structured findings.

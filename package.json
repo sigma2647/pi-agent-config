@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "postinstall": "npm install --prefix extensions/web-fetch"
+    "postinstall": "npm install --prefix extensions/web-fetch",
+    "test:subagents": "node --experimental-strip-types --test extensions/subagents/test/*.test.ts"
   },
   "pi": {
     "extensions": ["./extensions/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents"],
