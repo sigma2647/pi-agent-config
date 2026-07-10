@@ -10,11 +10,12 @@ import {
 
 export { parseDeniedTools, shouldAutoExitOnAgentEnd, shouldMarkUserTookOver } from "./visible-auto-exit-helpers.ts";
 
-// In legacy terminal input Ctrl+Shift+J is indistinguishable from Ctrl+J.
-// Use the latter so the widget works outside terminals that support Kitty's
-// extended keyboard protocol.
-const TOOL_WIDGET_SHORTCUT = "ctrl+j";
-const TOOL_WIDGET_SHORTCUT_LABEL = "Ctrl+J";
+// Use Ctrl+Shift+J instead of Ctrl+J to avoid conflicting with Pi's built-in
+// tui.input.newLine shortcut. Ctrl+J must remain available for inserting
+// newlines in the text input. Legacy terminals that cannot distinguish
+// Ctrl+Shift+J from Ctrl+J simply won't see the widget toggle.
+const TOOL_WIDGET_SHORTCUT = "ctrl+shift+j";
+const TOOL_WIDGET_SHORTCUT_LABEL = "Ctrl+Shift+J";
 
 export default function (pi: ExtensionAPI) {
 	const autoExit = process.env.PI_SUBAGENT_AUTO_EXIT === "1";
