@@ -139,8 +139,4 @@ export function resolveAgentCwd(parentCwd: string, requestedCwd: string | undefi
 	return path.resolve(parentCwd, requestedCwd ?? agentCwd ?? ".");
 }
 
-export function resolveVisibleInteractive(explicit: boolean | undefined, agent: AgentConfig): boolean {
-	if (explicit !== undefined) return explicit;
-	if (agent.interactive !== undefined) return agent.interactive;
-	return !(agent.autoExit ?? false);
-}
+

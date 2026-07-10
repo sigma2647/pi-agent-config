@@ -26,7 +26,6 @@ import {
 	discoverAgents,
 	resolveDeniedTools,
 	resolveAgentCwd,
-	resolveVisibleInteractive,
 	type AgentConfig,
 } from "./agent-discovery.ts";
 import {
@@ -627,7 +626,6 @@ async function launchVisibleSubagent(
 	agent: AgentConfig,
 	task: string,
 	cwd: string,
-	interactiveOverride?: boolean,
 ): Promise<VisibleSubagentRun> {
 	const detected = detectVisibleTarget(cwd);
 	if (!detected) {
@@ -635,7 +633,7 @@ async function launchVisibleSubagent(
 	}
 
 	const id = Math.random().toString(16).slice(2, 10);
-	const interactive = resolveVisibleInteractive(interactiveOverride, agent);
+	const interactive = !(agent.autoExit ?? false);
 	const piBin = resolvePiBinary();
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-sub-"));
 	const promptPath = path.join(tempDir, `${agent.name}.md`);
@@ -1183,7 +1181,7 @@ export default function (pi: ExtensionAPI) {
 			promptGuidelines: [
 				"Use this only when a visible live pane is useful. For ordinary delegated work, prefer `subagent`.",
 				"This tool returns immediately. Do not invent results after calling it; wait for the later completion message.",
-				"Use `interactive: true` when the user wants to continue talking to the child in its pane. Agent definitions without `auto-exit: true` are interactive by default.",
+				"Agent definitions with `auto-exit: true` run autonomously and close after their final answer. When omitted or false, the pane stays open for interaction and the agent must call `subagent_done`.",
 				"For multiple independent visible tasks, emit multiple `subagent_visible` tool calls in the same turn.",
 				"When the user explicitly asks for visible agents, call `subagent_visible` directly without narrating skill selection or planning.",
 			],
@@ -1191,9 +1189,6 @@ export default function (pi: ExtensionAPI) {
 				agent: Type.String({ description: "Name of the agent to invoke" }),
 				task: Type.String({ description: "Task description (self-contained — the subagent sees nothing else)" }),
 				cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-				interactive: Type.Optional(Type.Boolean({
-					description: "Keep the Pi session and pane open for direct user interaction. Defaults to agent frontmatter, otherwise the inverse of auto-exit.",
-				})),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				if (!params.agent || !params.task) {
@@ -1216,7 +1211,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const cwd = resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd);
-				const run = await launchVisibleSubagent(pi, agent, params.task, cwd, params.interactive);
+				const run = await launchVisibleSubagent(pi, agent, params.task, cwd);
 				return {
 					content: [{
 						type: "text",
