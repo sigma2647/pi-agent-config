@@ -197,16 +197,65 @@ const CHROMIUM_BIN = process.env.OPENCLI_CHROMIUM_BIN || "chromium";
 const DEFAULT_PROFILE = path.join(homedir(), ".config", "chromium");
 const OPENCLI_CDP_PORT = 19826;
 const WAKE_TIMEOUT_S = 10;
+const EXT_SCAN_MAX_DEPTH = 5;
+const BROWSER_CONFIG_ROOTS = [
+  path.join(homedir(), ".config", "chromium"),
+  path.join(homedir(), ".config", "google-chrome"),
+  path.join(homedir(), ".config", "google-chrome-beta"),
+  path.join(homedir(), ".config", "BraveSoftware", "Brave-Browser"),
+  path.join(homedir(), ".config", "BraveSoftware", "Brave-Browser-Beta"),
+];
+
+function looksLikeOpencliManifest(manifestPath: string): boolean {
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf8");
+    return /opencli/i.test(raw) || /Browser Bridge/i.test(raw);
+  } catch {
+    return false;
+  }
+}
+
+function scanForOpencliExtension(dir: string, depth = 0): string | null {
+  if (depth > EXT_SCAN_MAX_DEPTH) return null;
+
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(dir, entry.name);
+    const manifestPath = path.join(full, "manifest.json");
+
+    if (
+      fs.existsSync(manifestPath) &&
+      (/opencli/i.test(entry.name) || looksLikeOpencliManifest(manifestPath))
+    ) {
+      return full;
+    }
+
+    const nested = scanForOpencliExtension(full, depth + 1);
+    if (nested) return nested;
+  }
+
+  return null;
+}
 
 function findExtensionDir(): string | null {
-  const unpackedRoot = path.join(DEFAULT_PROFILE, "Default", "UnpackedExtensions");
-  try {
-    for (const entry of fs.readdirSync(unpackedRoot)) {
-      if (!entry.startsWith("opencli-extension-")) continue;
-      const manifestPath = path.join(unpackedRoot, entry, "manifest.json");
-      if (fs.existsSync(manifestPath)) return path.join(unpackedRoot, entry);
-    }
-  } catch {}
+  const override = process.env.OPENCLI_EXTENSION_DIR?.trim();
+  if (override) {
+    const manifestPath = path.join(override, "manifest.json");
+    if (fs.existsSync(manifestPath)) return override;
+  }
+
+  for (const root of BROWSER_CONFIG_ROOTS) {
+    const found = scanForOpencliExtension(root);
+    if (found) return found;
+  }
+
   return null;
 }
 
