@@ -15,6 +15,9 @@ npm run test:subagents
 ```
 
 Visible children show their available and denied tools above the editor. Press
-`Ctrl+J` to expand or collapse that widget; `caller_ping` returns a help
-request plus a resumable session path to the parent, and `subagent_done` closes
-the child explicitly. Reply with `subagent_resume` and that session path.
+`Ctrl+Shift+J` to expand or collapse that widget. Press `Ctrl+Shift+S` to stop
+starting new work, summarize the information already obtained, return that
+report to the parent, and close cleanly. `Escape` remains an immediate abort
+that leaves the child pane open. `caller_ping` returns a help request plus a
+resumable session path to the parent, and `subagent_done` closes the child
+explicitly. Reply with `subagent_resume` and that session path.
