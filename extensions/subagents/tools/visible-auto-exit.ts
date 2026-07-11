@@ -17,6 +17,11 @@ export { parseDeniedTools, shouldAutoExitOnAgentEnd, shouldMarkUserTookOver } fr
 const TOOL_WIDGET_SHORTCUT = "ctrl+shift+j";
 const TOOL_WIDGET_SHORTCUT_LABEL = "Ctrl+Shift+J";
 
+const GRACEFUL_RETURN_SHORTCUT = "ctrl+shift+s";
+const GRACEFUL_RETURN_SHORTCUT_LABEL = "Ctrl+Shift+S";
+const GRACEFUL_RETURN_PROMPT =
+	"Stop starting new searches or tool calls. Using only information already obtained, provide a concise final report for the parent agent with: completed work, main findings, and any incomplete or uncertain items. Treat that report as your final response.";
+
 export default function (pi: ExtensionAPI) {
 	const autoExit = process.env.PI_SUBAGENT_AUTO_EXIT === "1";
 	const exitFile = process.env.PI_VISIBLE_SUBAGENT_EXIT_FILE;
@@ -26,6 +31,7 @@ export default function (pi: ExtensionAPI) {
 	let userTookOver = false;
 	let agentStarted = false;
 	let expanded = false;
+	let gracefulReturnRequested = false;
 
 	function renderWidget(ctx: { ui: { setWidget: Function } }) {
 		const tools = typeof (pi as any).getAllTools === "function"
@@ -41,8 +47,11 @@ export default function (pi: ExtensionAPI) {
 					const deniedLine = denied.length
 						? `\n${theme.fg("muted", "denied: ")}${denied.map((name) => theme.fg("error", name)).join(theme.fg("muted", ", "))}`
 						: "";
+					const controls = gracefulReturnRequested
+						? `${TOOL_WIDGET_SHORTCUT_LABEL} to collapse · return requested · Esc abort`
+						: `${TOOL_WIDGET_SHORTCUT_LABEL} to collapse · ${GRACEFUL_RETURN_SHORTCUT_LABEL} summarize & return · Esc abort`;
 					box.addChild(new Text(
-						`${label}${theme.fg("dim", ` — ${tools.length} available`)}${theme.fg("muted", `  (${TOOL_WIDGET_SHORTCUT_LABEL} to collapse)`)}\n${toolList}${deniedLine}`,
+						`${label}${theme.fg("dim", ` — ${tools.length} available`)}${theme.fg("muted", `  (${controls})`)}\n${toolList}${deniedLine}`,
 						0,
 						0,
 					));
@@ -50,8 +59,11 @@ export default function (pi: ExtensionAPI) {
 					const deniedInfo = denied.length
 						? `${theme.fg("dim", " · ")}${theme.fg("error", `${denied.length} denied`)}`
 						: "";
+					const controls = gracefulReturnRequested
+						? `${TOOL_WIDGET_SHORTCUT_LABEL} to expand · return requested · Esc abort`
+						: `${TOOL_WIDGET_SHORTCUT_LABEL} to expand · ${GRACEFUL_RETURN_SHORTCUT_LABEL} summarize & return · Esc abort`;
 					box.addChild(new Text(
-						`${label}${theme.fg("dim", ` — ${tools.length} tools`)}${deniedInfo}${theme.fg("muted", `  (${TOOL_WIDGET_SHORTCUT_LABEL} to expand)`)}`,
+						`${label}${theme.fg("dim", ` — ${tools.length} tools`)}${deniedInfo}${theme.fg("muted", `  (${controls})`)}`,
 						0,
 						0,
 					));
@@ -71,6 +83,15 @@ export default function (pi: ExtensionAPI) {
 				renderWidget(ctx);
 			},
 		});
+		(pi as any).registerShortcut(GRACEFUL_RETURN_SHORTCUT, {
+			description: "Summarize current work and return to parent",
+			handler: (ctx: any) => {
+				if (gracefulReturnRequested) return;
+				gracefulReturnRequested = true;
+				renderWidget(ctx);
+				pi.sendUserMessage(GRACEFUL_RETURN_PROMPT, { deliverAs: "steer" });
+			},
+		});
 	}
 
 	pi.on("input", () => {
@@ -83,7 +104,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", (event, ctx) => {
-		if (!shouldAutoExitOnAgentEnd(autoExit, userTookOver, event.messages)) return;
+		if (!shouldAutoExitOnAgentEnd(autoExit, userTookOver, gracefulReturnRequested, event.messages)) return;
 		if (exitFile) {
 			try {
 				writeFileSync(exitFile, "done\n");

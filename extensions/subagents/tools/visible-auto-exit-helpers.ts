@@ -5,9 +5,10 @@ export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
 export function shouldAutoExitOnAgentEnd(
 	autoExit: boolean,
 	_userTookOver: boolean,
+	gracefulReturnRequested: boolean,
 	messages: Array<{ role?: string; stopReason?: string }> | undefined,
 ): boolean {
-	if (!autoExit) return false;
+	if (!autoExit && !gracefulReturnRequested) return false;
 	const lastAssistant = [...(messages ?? [])].reverse().find((message) => message.role === "assistant");
 	return lastAssistant?.stopReason !== "aborted";
 }
