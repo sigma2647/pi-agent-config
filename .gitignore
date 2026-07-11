@@ -5,6 +5,9 @@ auth.json
 sessions/
 cache/
 
+# Local git worktrees
+.worktrees/
+
 # Node modules in skills
 **/node_modules/
 
