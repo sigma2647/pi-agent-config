@@ -7,7 +7,6 @@ import {
 	discoverAgents,
 	resolveDeniedTools,
 	resolveAgentCwd,
-	resolveVisibleInteractive,
 } from "../agent-discovery.ts";
 
 const tempDirs: string[] = [];
@@ -56,18 +55,13 @@ describe("agent discovery", () => {
 		assert.equal(scout.interactive, true);
 	});
 
-	it("resolves cwd and visible interaction defaults", () => {
+	it("resolves cwd defaults", () => {
 		const root = makeTempDir();
 		const bundled = join(root, "bundled");
 		writeAgent(bundled, "worker.md", "name: worker\nauto-exit: true");
 		writeAgent(bundled, "planner.md", "name: planner");
-		const found = discoverAgents({ bundledDir: bundled, globalConfigDir: join(root, "global"), projectCwd: root });
-		const planner = found.find((agent) => agent.name === "planner")!;
-		const worker = found.find((agent) => agent.name === "worker")!;
+		discoverAgents({ bundledDir: bundled, globalConfigDir: join(root, "global"), projectCwd: root });
 
-		assert.equal(resolveVisibleInteractive(undefined, worker), false);
-		assert.equal(resolveVisibleInteractive(undefined, planner), true);
-		assert.equal(resolveVisibleInteractive(true, worker), true);
 		assert.equal(resolveAgentCwd(root, undefined, "packages/api"), join(root, "packages/api"));
 		assert.equal(resolveAgentCwd(root, "/tmp/override", "ignored"), "/tmp/override");
 	});
