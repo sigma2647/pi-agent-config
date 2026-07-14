@@ -86,6 +86,7 @@ Subagent panes are created without stealing keyboard focus (cmux, tmux). Launch 
 | ----------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
 | **planner**       | Opus (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans, creates todos |
 | **scout**         | Haiku                  | Fast codebase reconnaissance — maps files, patterns, conventions                         |
+| **researcher**    | Haiku                  | Searches the web and synthesizes focused, sourced findings                               |
 | **worker**        | Sonnet                 | Implements tasks from todos — writes code, runs tests, makes polished commits            |
 | **reviewer**      | Opus (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
 | **visual-tester** | Sonnet                 | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
