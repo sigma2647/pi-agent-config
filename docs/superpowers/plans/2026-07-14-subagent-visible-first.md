@@ -1,449 +1,495 @@
-# Subagent 默认可见优先实施计划
+# Subagent Visible-First Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 修复 Herdr pane 误判，并让 `subagent` 在存在 Herdr/tmux 时异步可见执行、仅在无 live mux 时同步回退。
+**Goal:** Make `subagent` prefer visible Herdr/tmux execution by default and automatically fall back to synchronous execution, with a reason, when visible startup is unavailable or fails.
 
-**Architecture:** 检测层优先信任 Herdr 注入的当前进程 pane ID，并保留原有命令探测兜底。执行层通过一个小型、可测试的 visible-first 调度函数选择现有 `launchVisibleSubagent()` 或 `runSubagent()`，不捕获 visible 启动错误；`subagent_visible` 继续严格要求 live mux。
+**Architecture:** A small pure dispatcher in `visible-helpers.ts` owns the visible-first policy and returns an explicit dispatch mode. Both tool registrations reuse one execution path in `index.ts`; the existing visible watcher remains unchanged. Visible startup cleanup is isolated in `visible-runtime.ts` so fallback never leaks temporary files or panes.
 
-**Tech Stack:** TypeScript、Node.js `node:test`、Pi Extension API、Herdr CLI、tmux。
+**Tech Stack:** TypeScript, Node.js `node:test`, Pi Extension API, TypeBox, Herdr, tmux.
 
-## 全局约束
+## Global Constraints
 
-- 不增加新的复用器后端或依赖。
-- 不增加用户可见模式参数。
-- 已检测到 mux 后的启动错误必须直接暴露，不得同步回退。
-- `subagent_visible` 保持严格可见语义。
-- `/subagent` 继续调用 `subagent`，自动继承 visible-first 行为。
-- 所有相对 TypeScript import 必须带 `.ts` 后缀。
-
----
-
-### Task 1：修复 Herdr 当前进程 pane 检测
-
-**Files:**
-- Modify: `extensions/subagents/visible-helpers.ts`
-- Modify: `extensions/subagents/visible-runtime.ts:38-60`
-- Test: `extensions/subagents/test/visible-helpers.test.ts`
-
-**Interfaces:**
-- Produces: `resolveHerdrPaneId(args): string | null`
-- Consumes: 现有 `HerdrPaneInfo`、`isFocusedHerdrPane()` 和 `detectVisibleTarget()`。
-
-- [ ] **Step 1：先写失败测试**
-
-在 `extensions/subagents/test/visible-helpers.test.ts` 的 import 中加入 `resolveHerdrPaneId`，并增加：
-
-```ts
-it("uses the Herdr pane inherited by the current process even when it is unfocused", () => {
-	assert.equal(resolveHerdrPaneId({
-		commandAvailable: true,
-		herdrEnv: "1",
-		envPaneId: " w10:p1K ",
-		currentPane: { pane_id: "w10:p1K", focused: false },
-	}), "w10:p1K");
-});
-
-it("requires a live Herdr command before trusting inherited pane identity", () => {
-	assert.equal(resolveHerdrPaneId({
-		commandAvailable: false,
-		herdrEnv: "1",
-		envPaneId: "w10:p1K",
-		currentPane: { pane_id: "w10:p1K", focused: true },
-	}), null);
-});
-
-it("falls back to a focused pane when no inherited Herdr identity exists", () => {
-	assert.equal(resolveHerdrPaneId({
-		commandAvailable: true,
-		currentPane: { pane_id: "w2:p3", focused: true },
-	}), "w2:p3");
-	assert.equal(resolveHerdrPaneId({
-		commandAvailable: true,
-		currentPane: { pane_id: "w2:p3", focused: false },
-	}), null);
-});
-```
-
-- [ ] **Step 2：运行测试并确认 RED**
-
-Run:
-
-```bash
-node --experimental-strip-types --test --test-name-pattern="Herdr pane inherited|live Herdr command|focused pane" extensions/subagents/test/*.test.ts
-```
-
-Expected: FAIL，提示 `resolveHerdrPaneId` 尚未导出。
-
-- [ ] **Step 3：实现最小纯函数**
-
-在 `extensions/subagents/visible-helpers.ts` 中加入：
-
-```ts
-export function resolveHerdrPaneId(args: {
-	commandAvailable: boolean;
-	herdrEnv?: string;
-	envPaneId?: string;
-	currentPane?: HerdrPaneInfo | null;
-}): string | null {
-	if (!args.commandAvailable) return null;
-	const envPaneId = args.envPaneId?.trim();
-	if (args.herdrEnv === "1" && envPaneId) return envPaneId;
-	return isFocusedHerdrPane(args.currentPane ?? null)
-		? args.currentPane!.pane_id
-		: null;
-}
-```
-
-在 `extensions/subagents/visible-runtime.ts` 中 import `resolveHerdrPaneId`，并把现有 Herdr 检测块替换为：
-
-```ts
-const herdrAvailable = hasCommand("herdr");
-let currentHerdrPane = null;
-const inheritedHerdrPane = process.env.HERDR_ENV === "1" && process.env.HERDR_PANE_ID?.trim();
-if (herdrAvailable && !inheritedHerdrPane) {
-	try {
-		currentHerdrPane = parseHerdrPaneCurrent(run(["herdr", "pane", "current"]));
-	} catch {}
-}
-const herdrPaneId = resolveHerdrPaneId({
-	commandAvailable: herdrAvailable,
-	herdrEnv: process.env.HERDR_ENV,
-	envPaneId: process.env.HERDR_PANE_ID,
-	currentPane: currentHerdrPane,
-});
-```
-
-删除 `visible-runtime.ts` 中不再直接使用的 `isFocusedHerdrPane` import。
-
-- [ ] **Step 4：运行测试并确认 GREEN**
-
-Run:
-
-```bash
-node --experimental-strip-types --test --test-name-pattern="Herdr pane inherited|live Herdr command|focused pane" extensions/subagents/test/*.test.ts
-```
-
-Expected: 3 个新增测试 PASS。
-
-- [ ] **Step 5：在当前 Herdr 会话验证真实检测**
-
-Run:
-
-```bash
-node --experimental-strip-types --no-warnings -e 'import("./extensions/subagents/visible-runtime.ts").then(m => console.log(JSON.stringify(m.detectVisibleTarget(process.cwd()))))'
-```
-
-Expected: 输出类似 `{"backend":"herdr","paneId":"w10:p1K"}`，即使 `herdr pane current` 的 `focused` 为 `false`。
-
-- [ ] **Step 6：提交检测修复**
-
-```bash
-git add extensions/subagents/visible-helpers.ts extensions/subagents/visible-runtime.ts extensions/subagents/test/visible-helpers.test.ts
-git commit -m "fix(subagents): trust inherited Herdr pane identity"
-```
+- `subagent` defaults to visible execution in TUI mode; `visible: false` forces synchronous execution.
+- Non-TUI mode, missing mux targets, and visible startup exceptions automatically fall back synchronously and report the reason.
+- Once a visible child has started, later child failure or interruption must never trigger a second synchronous execution.
+- `subagent_visible` remains registered for compatibility and uses the same startup-fallback policy.
+- Do not add a new tool, mux backend, dependency, task-duration heuristic, or unrelated Herdr detection change.
+- Every relative TypeScript import ends in `.ts`.
 
 ---
 
-### Task 2：让 `subagent` 使用 visible-first 调度
+### Task 1: Add the Tested Visible-First Dispatch Policy
 
 **Files:**
 - Modify: `extensions/subagents/visible-helpers.ts`
-- Modify: `extensions/subagents/index.ts:625-668,1017-1173,1175-1279`
 - Test: `extensions/subagents/test/visible-helpers.test.ts`
 
 **Interfaces:**
-- Produces: `runVisibleFirst(target, launchVisible, runSync): Promise<TVisible | TSync>`。
-- Changes: `launchVisibleSubagent(..., detected?)` 可接收已经检测到的 `DetectedVisibleTarget`，避免重复检测。
-- Preserves: `subagent_visible` 省略 `detected` 参数时仍执行严格检测。
+- Produces: `dispatchVisibleFirst<TVisible, TSync>(options): Promise<VisibleFirstDispatch<TVisible, TSync>>`
+- Produces: `VisibleFirstDispatch<TVisible, TSync>` with `dispatchMode`, `value`, and optional `fallbackReason`.
+- Consumes: existing `DetectedVisibleTarget`.
 
-- [ ] **Step 1：先写 visible-first 调度失败测试**
+- [ ] **Step 1: Write failing dispatch-policy tests**
 
-在 `extensions/subagents/test/visible-helpers.test.ts` import `runVisibleFirst`，增加：
+Add `dispatchVisibleFirst` to the existing import in `extensions/subagents/test/visible-helpers.test.ts`, then append:
 
 ```ts
-it("prefers visible execution when a mux target exists", async () => {
+it("prefers visible execution in TUI mode", async () => {
 	let syncCalls = 0;
-	const result = await runVisibleFirst(
-		{ backend: "herdr", paneId: "w10:p1K" },
-		async (target) => `visible:${target.paneId}`,
-		async () => { syncCalls++; return "sync"; },
-	);
-	assert.equal(result, "visible:w10:p1K");
+	const result = await dispatchVisibleFirst({
+		mode: "tui",
+		preferVisible: true,
+		target: { backend: "herdr", paneId: "w1:p2" },
+		launchVisible: async () => "visible",
+		runSync: async () => { syncCalls++; return "sync"; },
+	});
+	assert.deepEqual(result, { dispatchMode: "visible", value: "visible" });
 	assert.equal(syncCalls, 0);
 });
 
-it("falls back to sync only when no mux target exists", async () => {
+it("falls back once when visible execution is unavailable", async () => {
+	for (const testCase of [
+		{ mode: "rpc", target: { backend: "herdr" as const, paneId: "w1:p2" }, reason: /TUI mode/ },
+		{ mode: "tui", target: null, reason: /Herdr\/tmux target/ },
+	]) {
+		let syncCalls = 0;
+		const result = await dispatchVisibleFirst({
+			mode: testCase.mode,
+			preferVisible: true,
+			target: testCase.target,
+			launchVisible: async () => "visible",
+			runSync: async () => { syncCalls++; return "sync"; },
+		});
+		assert.equal(result.dispatchMode, "sync-fallback");
+		assert.match(result.fallbackReason ?? "", testCase.reason);
+		assert.equal(result.value, "sync");
+		assert.equal(syncCalls, 1);
+	}
+});
+
+it("falls back once when visible startup throws", async () => {
+	let syncCalls = 0;
+	const result = await dispatchVisibleFirst({
+		mode: "tui",
+		preferVisible: true,
+		target: { backend: "tmux", paneId: "%7" },
+		launchVisible: async () => { throw new Error("split failed"); },
+		runSync: async () => { syncCalls++; return "sync"; },
+	});
+	assert.equal(result.dispatchMode, "sync-fallback");
+	assert.match(result.fallbackReason ?? "", /split failed/);
+	assert.equal(syncCalls, 1);
+});
+
+it("runs synchronously without calling visible when explicitly disabled", async () => {
 	let visibleCalls = 0;
-	const result = await runVisibleFirst(
-		null,
-		async () => { visibleCalls++; return "visible"; },
-		async () => "sync",
-	);
-	assert.equal(result, "sync");
+	const result = await dispatchVisibleFirst({
+		mode: "tui",
+		preferVisible: false,
+		target: { backend: "herdr", paneId: "w1:p2" },
+		launchVisible: async () => { visibleCalls++; return "visible"; },
+		runSync: async () => "sync",
+	});
+	assert.deepEqual(result, { dispatchMode: "sync", value: "sync" });
 	assert.equal(visibleCalls, 0);
 });
-
-it("surfaces visible launch failures without running sync fallback", async () => {
-	let syncCalls = 0;
-	await assert.rejects(
-		runVisibleFirst(
-			{ backend: "herdr", paneId: "w10:p1K" },
-			async () => { throw new Error("split failed"); },
-			async () => { syncCalls++; return "sync"; },
-		),
-		/split failed/,
-	);
-	assert.equal(syncCalls, 0);
-});
 ```
 
-- [ ] **Step 2：运行测试并确认 RED**
+- [ ] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
 ```bash
-node --experimental-strip-types --test --test-name-pattern="prefers visible execution|falls back to sync|visible launch failures" extensions/subagents/test/*.test.ts
+node --experimental-strip-types --test --test-name-pattern="prefers visible|falls back once|explicitly disabled" extensions/subagents/test/visible-helpers.test.ts
 ```
 
-Expected: FAIL，提示 `runVisibleFirst` 尚未导出。
+Expected: FAIL because `dispatchVisibleFirst` is not exported.
 
-- [ ] **Step 3：实现最小调度函数**
+- [ ] **Step 3: Implement the minimal policy helper**
 
-在 `extensions/subagents/visible-helpers.ts` 中加入：
-
-```ts
-export async function runVisibleFirst<TVisible, TSync>(
-	target: DetectedVisibleTarget | null,
-	launchVisible: (target: DetectedVisibleTarget) => Promise<TVisible>,
-	runSync: () => Promise<TSync>,
-): Promise<TVisible | TSync> {
-	return target ? launchVisible(target) : runSync();
-}
-```
-
-该函数不得加入 `try/catch`，确保 detected-mux 启动错误不会触发同步回退。
-
-- [ ] **Step 4：让 visible launcher 接收已检测目标**
-
-在 `extensions/subagents/index.ts` import `DetectedVisibleTarget` 和 `runVisibleFirst`，将函数签名改为：
+Add to `extensions/subagents/visible-helpers.ts`:
 
 ```ts
-async function launchVisibleSubagent(
-	pi: ExtensionAPI,
-	agent: AgentConfig,
-	task: string,
-	cwd: string,
-	detected: DetectedVisibleTarget | null = detectVisibleTarget(cwd),
-): Promise<VisibleSubagentRun> {
-	if (!detected) {
-		throw new Error("Visible subagent mode requires a supported live mux target (Herdr or tmux).");
+export type VisibleFirstDispatch<TVisible, TSync> =
+	| { dispatchMode: "visible"; value: TVisible; fallbackReason?: never }
+	| { dispatchMode: "sync"; value: TSync; fallbackReason?: never }
+	| { dispatchMode: "sync-fallback"; value: TSync; fallbackReason: string };
+
+export async function dispatchVisibleFirst<TVisible, TSync>(options: {
+	mode: string;
+	preferVisible: boolean;
+	target: DetectedVisibleTarget | null;
+	launchVisible: (target: DetectedVisibleTarget) => Promise<TVisible>;
+	runSync: () => Promise<TSync>;
+}): Promise<VisibleFirstDispatch<TVisible, TSync>> {
+	if (!options.preferVisible) {
+		return { dispatchMode: "sync", value: await options.runSync() };
 	}
-```
 
-函数其余生命周期保持不变。
+	let fallbackReason: string;
+	if (options.mode !== "tui") {
+		fallbackReason = `Visible subagents require TUI mode (current: ${options.mode}).`;
+	} else if (!options.target) {
+		fallbackReason = "No supported Herdr/tmux target is available.";
+	} else {
+		try {
+			return {
+				dispatchMode: "visible",
+				value: await options.launchVisible(options.target),
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			fallbackReason = `Visible subagent startup failed: ${message}`;
+		}
+	}
 
-- [ ] **Step 5：把 `subagent.execute` 包装为 visible-first**
-
-在 agent/self-spawn 校验后，用以下完整代码替换原有仅同步执行块：
-
-```ts
-const cwd = resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd);
-return runVisibleFirst(
-	detectVisibleTarget(cwd),
-	async (target) => {
-		const run = await launchVisibleSubagent(pi, agent, params.task, cwd, target);
-		return {
-			content: [{
-				type: "text",
-				text: `Started ${run.interactive ? "interactive" : "autonomous"} visible subagent "${run.name}" in ${run.target.backend} pane ${run.target.paneId}.`,
-			}],
-			details: {
-				id: run.id,
-				name: run.name,
-				agent: run.agent,
-				backend: run.target.backend,
-				paneId: run.target.paneId,
-				interactive: run.interactive,
-				status: "started",
-			},
-		};
-	},
-	async () => {
-		const { provider, modelId } = splitModel(agent.model || "");
-		const registry = (ctx as any).modelRegistry;
-		const contextWindow = provider && modelId && registry?.find
-			? registry.find(provider, modelId)?.contextWindow
-			: undefined;
-
-		const liveResult: AgentResult = {
-			agent: params.agent,
-			task: params.task,
-			output: "",
-			exitCode: -1,
-			model: agent.model,
-			contextWindow,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-			progress: {
-				agent: params.agent,
-				status: "running" as const,
-				task: params.task,
-				recentTools: [],
-				toolCount: 0,
-				tokens: 0,
-				durationMs: 0,
-				lastMessage: "",
-			},
-		};
-
-		const result = await semaphore.run(() =>
-			runSubagent(
-				agent,
-				params.task,
-				cwd,
-				signal,
-				(progress, usage) => {
-					liveResult.progress = progress;
-					liveResult.usage = { ...usage };
-					onUpdate?.({
-						content: [{ type: "text", text: "(running...)" }],
-						details: { results: [liveResult] },
-					});
-				},
-			),
-		);
-
-		result.contextWindow = contextWindow;
-		const isError = result.exitCode !== 0 || !!result.progress.error;
-		return {
-			content: [{ type: "text", text: result.output || "(no output)" }],
-			details: { results: [result] },
-			...(isError ? { isError: true } : {}),
-		};
-	},
-);
-```
-
-`runVisibleFirst()` 不捕获异常，因此 `launchVisibleSubagent()` 失败会直接向上传播，不会执行同步回调。
-
-- [ ] **Step 6：让 `subagent` renderer 支持 visible started 结果**
-
-在原 `details.results` 判断之前识别：
-
-```ts
-const visibleDetails = result.details as {
-	name?: string;
-	backend?: VisibleBackend;
-	paneId?: string;
-	interactive?: boolean;
-	status?: string;
-} | undefined;
-if (visibleDetails?.status === "started") {
-	const mode = visibleDetails.interactive ? "interactive" : "autonomous";
-	return new Text(
-		`${theme.fg("accent", "▸")} ${theme.fg("toolTitle", theme.bold(visibleDetails.name ?? "subagent"))} ${theme.fg("dim", `— ${mode} · ${visibleDetails.backend}:${visibleDetails.paneId}`)}`,
-		0,
-		0,
-	);
+	return {
+		dispatchMode: "sync-fallback",
+		fallbackReason,
+		value: await options.runSync(),
+	};
 }
 ```
 
-保留原同步进度 renderer。`subagent_visible` 的 execute 和 renderer 继续严格调用 `launchVisibleSubagent()`，不传目标时由其自行检测并在无 mux 时抛错。
+The helper catches only the `launchVisible()` promise. After that promise resolves, watcher-delivered child failures are outside this call and cannot trigger fallback.
 
-- [ ] **Step 7：更新工具提示词**
+- [ ] **Step 4: Run the focused tests and verify GREEN**
 
-将 `subagent` 描述改为明确说明：默认在 Herdr/tmux pane 中异步启动并立即返回；没有 live mux 时才同步执行。指导中要求 visible started 后等待异步结果，不得编造结果。
+Run the Step 2 command again.
 
-将 `subagent_visible` 第一条指导改为：它是需要严格可见执行、且不允许同步回退时使用的显式工具；删除“ordinary delegated work, prefer subagent”造成的旧语义歧义。
+Expected: 4 tests PASS and 0 FAIL.
 
-`/subagent` 已通过 `buildSubagentUserMessage()` 调用 `subagent`，不增加第二套命令逻辑。
-
-- [ ] **Step 8：运行调度测试并确认 GREEN**
-
-Run:
+- [ ] **Step 5: Commit the dispatch policy**
 
 ```bash
-node --experimental-strip-types --test --test-name-pattern="prefers visible execution|falls back to sync|visible launch failures" extensions/subagents/test/*.test.ts
-```
-
-Expected: 3 个调度测试 PASS。
-
-- [ ] **Step 9：提交 visible-first 行为**
-
-```bash
-git add extensions/subagents/visible-helpers.ts extensions/subagents/index.ts extensions/subagents/test/visible-helpers.test.ts
-git commit -m "feat(subagents): prefer visible execution"
+git add extensions/subagents/visible-helpers.ts extensions/subagents/test/visible-helpers.test.ts
+git commit -m "feat(subagents): add visible-first dispatch policy"
 ```
 
 ---
 
-### Task 3：同步文档并完成回归验证
+### Task 2: Clean Up Failed Visible Starts
 
 **Files:**
-- Modify: `extensions/subagents/README.md`
-- Modify: `AGENTS.md`
-- Verify: `extensions/subagents/index.ts`
-- Verify: `extensions/subagents/visible-runtime.ts`
+- Modify: `extensions/subagents/visible-runtime.ts`
+- Modify: `extensions/subagents/index.ts:625-715`
+- Test: `extensions/subagents/test/visible-runtime.test.ts`
 
 **Interfaces:**
-- Documents: `subagent` visible-first + sync fallback；`subagent_visible` strict visible。
-- Preserves: 所有既有 CLI、agent frontmatter 和 visible lifecycle 接口。
+- Produces: `cleanupFailedVisibleLaunch(tempDir, target, closePane?)`.
+- Changes: `launchVisibleSubagent()` wraps pre-start work and invokes the cleanup helper before rethrowing.
+- Consumes: existing `VisibleRunTarget` and `closeVisiblePane()`.
 
-- [ ] **Step 1：更新扩展 README**
+- [ ] **Step 1: Write a failing cleanup test**
 
-把：
+Import `existsSync` alongside the current fs imports and add `cleanupFailedVisibleLaunch` to the runtime import. Append:
 
-```md
-- `index.ts` — registers synchronous `subagent` and visible-pane tools.
+```ts
+it("cleans temporary files and a created pane after startup failure", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-subagents-failed-launch-"));
+	tempDirs.push(dir);
+	writeFileSync(join(dir, "task.md"), "task");
+	let closedPane: string | null = null;
+
+	cleanupFailedVisibleLaunch(
+		dir,
+		{ backend: "herdr", paneId: "w1:p9" },
+		(target) => { closedPane = target.paneId; },
+	);
+
+	assert.equal(closedPane, "w1:p9");
+	assert.equal(existsSync(dir), false);
+});
+
+it("does not let cleanup errors replace the startup error", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-subagents-failed-cleanup-"));
+	tempDirs.push(dir);
+	assert.doesNotThrow(() => cleanupFailedVisibleLaunch(
+		dir,
+		{ backend: "tmux", paneId: "%9" },
+		() => { throw new Error("close failed"); },
+	));
+	assert.equal(existsSync(dir), false);
+});
 ```
 
-改为：
+- [ ] **Step 2: Run the focused tests and verify RED**
 
-```md
-- `index.ts` — registers visible-first `subagent`, strict `subagent_visible`, and visible-pane lifecycle tools. `subagent` falls back to synchronous execution only when no supported live mux is available.
+```bash
+node --experimental-strip-types --test --test-name-pattern="startup failure|cleanup errors" extensions/subagents/test/visible-runtime.test.ts
 ```
 
-- [ ] **Step 2：更新 AGENTS.md 的 subagent 约定**
+Expected: FAIL because `cleanupFailedVisibleLaunch` is not exported.
 
-把“`subagent` runs an isolated child and returns its result synchronously”改为以下语义：
+- [ ] **Step 3: Implement the cleanup helper**
 
-```md
-`subagent` is visible-first: in Herdr/tmux it returns immediately and delivers the result later; without a supported live mux it falls back to the isolated synchronous child. `subagent_visible` is the strict visible-only entry point and never falls back synchronously.
+Add `rmSync` to the fs import in `extensions/subagents/visible-runtime.ts`, then add:
+
+```ts
+export function cleanupFailedVisibleLaunch(
+	tempDir: string,
+	target: VisibleRunTarget | null,
+	closePane: (target: VisibleRunTarget) => void = closeVisiblePane,
+): void {
+	if (target) {
+		try { closePane(target); } catch {}
+	}
+	try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+}
 ```
 
-保留后续 auto-exit、interrupt、resume 和 graceful return 说明。
+- [ ] **Step 4: Wrap `launchVisibleSubagent()` startup in cleanup**
 
-- [ ] **Step 3：运行完整自动测试**
+Import `cleanupFailedVisibleLaunch` in `extensions/subagents/index.ts`. After creating `tempDir`, declare:
 
-Run:
+```ts
+let target: VisibleRunTarget | null = null;
+```
+
+Wrap prompt/task writes, script construction, pane creation, `launchVisibleRun()`, run registration, watcher startup, and return in `try`. Change the existing declaration to assignment:
+
+```ts
+target = createVisiblePane(detected, cwd, `${agent.name}:${id}`, initialCommand);
+```
+
+At the end add:
+
+```ts
+} catch (error) {
+	visibleSubagents.delete(id);
+	cleanupFailedVisibleLaunch(tempDir, target);
+	throw error;
+}
+```
+
+Do not include watcher-reported child errors in this `try/catch`; the catch only covers work before `launchVisibleSubagent()` returns.
+
+- [ ] **Step 5: Run the focused tests and verify GREEN**
+
+Run the Step 2 command again.
+
+Expected: 2 tests PASS and 0 FAIL.
+
+- [ ] **Step 6: Commit startup cleanup**
+
+```bash
+git add extensions/subagents/visible-runtime.ts extensions/subagents/index.ts extensions/subagents/test/visible-runtime.test.ts
+git commit -m "fix(subagents): clean failed visible starts"
+```
+
+---
+
+### Task 3: Route Both Tools Through Visible-First Execution
+
+**Files:**
+- Modify: `extensions/subagents/index.ts:65-95,625-715,1017-1284`
+- Test: `extensions/subagents/test/visible-helpers.test.ts` (dispatch behavior supplied by Task 1)
+
+**Interfaces:**
+- Consumes: `dispatchVisibleFirst()` from Task 1.
+- Produces: one internal `executeSubagent(params, signal, onUpdate, ctx, preferVisible)` function used by both registered tools.
+- Produces details with `dispatchMode: "visible" | "sync" | "sync-fallback"` and optional `fallbackReason`.
+
+- [ ] **Step 1: Re-run the dispatch contract before integration**
+
+```bash
+node --experimental-strip-types --test --test-name-pattern="prefers visible|falls back once|explicitly disabled" extensions/subagents/test/visible-helpers.test.ts
+```
+
+Expected: PASS. These tests are the red/green contract written before the tool integration and prove visible preference, startup fallback, single synchronous execution, and explicit synchronous execution.
+
+- [ ] **Step 2: Define unified result details**
+
+Replace the current `Details` interface in `extensions/subagents/index.ts` with:
+
+```ts
+interface VisibleStartedDetails {
+	dispatchMode: "visible";
+	id: string;
+	name: string;
+	agent: string;
+	backend: VisibleBackend;
+	paneId?: string;
+	interactive: boolean;
+	status: "started";
+}
+
+interface SyncDetails {
+	dispatchMode: "sync" | "sync-fallback";
+	results: AgentResult[];
+	fallbackReason?: string;
+}
+
+type Details = VisibleStartedDetails | SyncDetails;
+```
+
+Import `dispatchVisibleFirst` and `type DetectedVisibleTarget` from `visible-helpers.ts`.
+
+- [ ] **Step 3: Extract the existing synchronous body once**
+
+Inside the extension factory, add a local `runSync(...)` helper containing the current `subagent.execute()` model lookup, `liveResult`, semaphore, progress callback, `runSubagent()`, and final `AgentToolResult` construction. Its returned details must include:
+
+```ts
+{
+	dispatchMode,
+	results: [result],
+	...(fallbackReason ? { fallbackReason } : {}),
+}
+```
+
+Do not duplicate the synchronous body in the two tool registrations.
+
+- [ ] **Step 4: Add the shared visible-first executor**
+
+Inside the extension factory add `executeSubagent(...)` that performs the current parameter, agent, and self-spawn validation once, resolves `cwd`, and calls:
+
+```ts
+const dispatch = await dispatchVisibleFirst({
+	mode: ctx.mode,
+	preferVisible,
+	target: ctx.mode === "tui" && preferVisible ? detectVisibleTarget(cwd) : null,
+	launchVisible: (target) => launchVisibleSubagent(pi, agent, params.task, cwd, target),
+	runSync: () => runSync(agent, params, cwd, signal, onUpdate, ctx),
+});
+```
+
+Update `launchVisibleSubagent()` to accept an optional already-detected target:
+
+```ts
+detected = detectVisibleTarget(cwd),
+```
+
+Map dispatch results as follows:
+
+- `visible`: return current started content and `VisibleStartedDetails` with `dispatchMode: "visible"`;
+- `sync`: return the synchronous result with `dispatchMode: "sync"`;
+- `sync-fallback`: prefix content with `Visible execution unavailable; used synchronous fallback: ${fallbackReason}\n\n` and add `dispatchMode` plus `fallbackReason` to details.
+
+The dispatcher must invoke `runSync()` exactly once per synchronous result.
+
+- [ ] **Step 5: Update the `subagent` schema and execution**
+
+Add the direct semantic boolean:
+
+```ts
+visible: Type.Optional(Type.Boolean({
+	description: "Prefer a visible Herdr/tmux pane; defaults to true. Set false for synchronous hidden execution.",
+})),
+```
+
+Replace its execution body with:
+
+```ts
+return executeSubagent(params, signal, onUpdate, ctx, params.visible !== false);
+```
+
+- [ ] **Step 6: Reuse the executor from `subagent_visible`**
+
+Replace its execution body with:
+
+```ts
+return executeSubagent(params, signal, onUpdate, ctx, true);
+```
+
+Keep its existing parameter schema for compatibility; do not add a second preference option.
+
+- [ ] **Step 7: Support both result shapes in renderers**
+
+In `subagent.renderResult()`, first handle `details.dispatchMode === "visible"` using the existing visible started renderer. For synchronous details, keep the existing progress boxes; when `dispatchMode === "sync-fallback"`, prepend a warning line containing `fallbackReason`.
+
+In `subagent_visible.renderResult()`, retain the current started renderer for `dispatchMode === "visible"`. For `sync` or `sync-fallback`, render the returned text content directly and prefix the fallback reason when present. Do not assume every result has `status: "started"` after this change.
+
+- [ ] **Step 8: Route `/subagent-visible` through its tool**
+
+Import `buildVisibleSubagentUserMessage` from `visible-helpers.ts`, then replace the command's direct `launchVisibleSubagent()` call with:
+
+```ts
+pi.sendUserMessage(buildVisibleSubagentUserMessage(parsed.agentName, parsed.task));
+```
+
+This ensures command invocations receive the same fallback behavior instead of bypassing the tool executor.
+
+- [ ] **Step 9: Run the complete subagent tests**
 
 ```bash
 npm run test:subagents
 ```
 
-Expected: 全部测试 PASS，0 FAIL。
+Expected: all tests PASS, 0 FAIL.
 
-- [ ] **Step 4：运行静态诊断和 diff 检查**
-
-Run:
+- [ ] **Step 10: Commit unified routing**
 
 ```bash
+git add extensions/subagents/index.ts
+git commit -m "feat(subagents): prefer visible execution by default"
+```
+
+---
+
+### Task 4: Update Prompts, Documentation, and Verify Both Paths
+
+**Files:**
+- Modify: `extensions/subagents/index.ts:1017-1187`
+- Modify: `extensions/subagents/README.md`
+- Modify: `AGENTS.md:72`
+
+**Interfaces:**
+- Documents: canonical `subagent` visible-first behavior, explicit `visible: false`, and automatic synchronous fallback.
+- Preserves: visible lifecycle controls and agent discovery precedence.
+
+- [ ] **Step 1: Update tool guidance**
+
+Change `subagent` description/guidelines to state:
+
+```text
+Use `subagent` as the normal delegation entry point. In TUI mode it prefers a visible Herdr/tmux pane and returns immediately; when visible startup is unavailable it automatically runs synchronously and reports why. After a visible start, wait for the later completion message and do not invent results.
+```
+
+Remove the old instruction that ordinary delegated work should prefer synchronous `subagent`. Describe `subagent_visible` as a compatibility alias that also uses visible-first startup fallback.
+
+- [ ] **Step 2: Update extension documentation**
+
+In `extensions/subagents/README.md`, replace the index bullet with:
+
+```md
+- `index.ts` — registers visible-first `subagent`, compatibility `subagent_visible`, and visible lifecycle tools. Visible startup failures automatically fall back to synchronous execution with a reported reason.
+```
+
+Add one sentence documenting `visible: false` for an explicitly synchronous hidden call.
+
+- [ ] **Step 3: Update repository instructions**
+
+Replace the opening of the subagents paragraph in `AGENTS.md` with:
+
+```md
+**subagents uses one visible-first default.** `subagent` is the normal delegation entry point: in TUI mode it tries Herdr/tmux visible execution first and returns immediately; if visible startup is unavailable or fails, it automatically falls back to the isolated synchronous child and reports the reason. Pass `visible: false` only when synchronous hidden execution is explicitly required. `subagent_visible` remains a compatibility entry point with the same startup fallback behavior.
+```
+
+Keep the existing auto-exit, interrupt, resume, widget, and discovery text after it.
+
+- [ ] **Step 4: Run automated verification**
+
+```bash
+npm run test:subagents
 git diff --check
 ```
 
-Expected: exit 0，无 whitespace error。
+Expected: all tests PASS; `git diff --check` exits 0.
 
-对以下文件运行 LSP diagnostics：
+- [ ] **Step 5: Run TypeScript diagnostics**
+
+Run LSP diagnostics for:
 
 - `extensions/subagents/index.ts`
 - `extensions/subagents/visible-helpers.ts`
 - `extensions/subagents/visible-runtime.ts`
 
-Expected: 无新增 error。
+If the workspace has no TypeScript LSP, record that fact and rely on the Node type-stripping test suite plus the smoke tests; do not claim LSP success.
 
-- [ ] **Step 5：真实 Herdr smoke test**
+- [ ] **Step 6: Verify visible execution in the current Herdr session**
 
-在当前 Herdr 会话重新加载扩展后调用一个短任务：
+Reload the extension, then invoke:
 
 ```text
 subagent(agent="scout", task="Reply only with: visible smoke ok")
@@ -451,36 +497,37 @@ subagent(agent="scout", task="Reply only with: visible smoke ok")
 
 Expected:
 
-1. `subagent` 立即返回 started acknowledgement；
-2. 在当前 `HERDR_PANE_ID` 旁创建可见 pane；
-3. 子 agent 完成后异步回传结果；
-4. 不出现同步 `(running...)` 进度。
+1. tool returns a visible started acknowledgement immediately;
+2. a Herdr/tmux pane is created;
+3. the child later delivers `visible smoke ok`;
+4. no synchronous `(running...)` progress appears.
 
-- [ ] **Step 6：无 mux 回退 smoke test**
+- [ ] **Step 7: Verify forced synchronous execution**
 
-Run:
+Invoke:
 
-```bash
-env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u TMUX -u TMUX_PANE \
-	node --experimental-strip-types --no-warnings -e 'import("./extensions/subagents/visible-runtime.ts").then(m => console.log(m.detectVisibleTarget(process.cwd())))'
+```text
+subagent(agent="scout", task="Reply only with: sync smoke ok", visible=false)
 ```
 
-Expected: 输出 `null`。随后由 Task 2 的 `falls back to sync only when no mux target exists` 自动测试证明该状态选择同步回调。
+Expected: no pane is created; the tool waits and returns `sync smoke ok` with `dispatchMode: "sync"`.
 
-- [ ] **Step 7：提交文档**
+- [ ] **Step 8: Verify automatic no-mux fallback policy**
+
+Run the dispatch-policy focused test from Task 1 and confirm the no-target case returns `dispatchMode: "sync-fallback"` with a Herdr/tmux reason. Do not launch a second real Pi process merely to simulate a headless parent.
+
+- [ ] **Step 9: Commit documentation**
 
 ```bash
-git add extensions/subagents/README.md AGENTS.md
-git commit -m "docs(subagents): document visible-first execution"
+git add extensions/subagents/index.ts extensions/subagents/README.md AGENTS.md
+git commit -m "docs(subagents): document visible-first fallback"
 ```
 
-- [ ] **Step 8：最终状态确认**
-
-Run:
+- [ ] **Step 10: Final repository check**
 
 ```bash
 git status --short
-git log -n 5 --oneline
+git log -n 6 --oneline
 ```
 
-Expected: 工作区干净；最新提交依次包含 Herdr 检测修复、visible-first 行为和文档同步。
+Expected: working tree clean and the implementation commits are present after the revised design/plan commits.
