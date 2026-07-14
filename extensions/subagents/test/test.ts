@@ -21,6 +21,8 @@ import {
   shellEscape,
   isCmuxAvailable,
   isWezTermAvailable,
+  parseHerdrPaneCurrent,
+  parseHerdrPaneSplit,
   parseCmuxFocusedSnapshot,
   parseCmuxFocusedSnapshotFromJson,
   parseCmuxJson,
@@ -2086,6 +2088,30 @@ describe("subagents widget rendering", () => {
 });
 
 describe("cmux.ts", () => {
+  describe("Herdr response parsing", () => {
+    it("parses a focused current pane and JSON or text split output", () => {
+      assert.deepEqual(
+        parseHerdrPaneCurrent('{"result":{"pane":{"pane_id":"w1:p9","focused":true}}}'),
+        { paneId: "w1:p9", focused: true },
+      );
+      assert.deepEqual(
+        parseHerdrPaneCurrent('{"result":{"pane":{"pane_id":"w1:p9","focused":false}}}'),
+        { paneId: "w1:p9", focused: false },
+      );
+      assert.equal(
+        parseHerdrPaneSplit('{"result":{"pane":{"pane_id":"w1:p10"}}}'),
+        "w1:p10",
+      );
+      assert.equal(parseHerdrPaneSplit("created pane w1:p11"), "w1:p11");
+    });
+
+    it("rejects malformed Herdr responses", () => {
+      assert.equal(parseHerdrPaneCurrent("not json"), null);
+      assert.equal(parseHerdrPaneCurrent('{"result":{"pane":{"focused":true}}}'), null);
+      assert.equal(parseHerdrPaneSplit('{"result":{"pane":{}}}'), null);
+    });
+  });
+
   describe("shellEscape", () => {
     it("wraps in single quotes", () => {
       assert.equal(shellEscape("hello"), "'hello'");

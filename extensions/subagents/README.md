@@ -32,6 +32,7 @@ pi install git:github.com/HazAT/pi-interactive-subagents
 Supported multiplexers:
 
 - [cmux](https://github.com/manaflow-ai/cmux)
+- Herdr
 - [tmux](https://github.com/tmux/tmux)
 - [zellij](https://zellij.dev)
 - [WezTerm](https://wezfurlong.org/wezterm/) (terminal emulator with built-in multiplexing)
@@ -41,6 +42,8 @@ Start pi inside one of them:
 ```bash
 cmux pi
 # or
+# run pi from a focused Herdr pane
+# or
 tmux new -A -s pi 'pi'
 # or
 zellij --session pi   # then run: pi
@@ -48,7 +51,7 @@ zellij --session pi   # then run: pi
 # just run pi inside WezTerm — no wrapper needed
 ```
 
-Optional: set `PI_SUBAGENT_MUX=cmux|tmux|zellij|wezterm` to force a specific backend.
+Optional: set `PI_SUBAGENT_MUX=cmux|herdr|tmux|zellij|wezterm` to force a specific backend.
 
 If your shell startup is slow and subagent commands sometimes get dropped before the prompt is ready, set `PI_SUBAGENT_SHELL_READY_DELAY_MS` to a higher value (defaults to `500`):
 
@@ -469,12 +472,15 @@ Every sub-agent session displays a compact tools widget showing available and de
 - [pi](https://github.com/badlogic/pi-mono) — the coding agent
 - One supported multiplexer:
   - [cmux](https://github.com/manaflow-ai/cmux)
+  - Herdr
   - [tmux](https://github.com/tmux/tmux)
   - [zellij](https://zellij.dev)
   - [WezTerm](https://wezfurlong.org/wezterm/)
 
 ```bash
 cmux pi
+# or
+# run pi from a focused Herdr pane
 # or
 tmux new -A -s pi 'pi'
 # or
@@ -486,7 +492,7 @@ zellij --session pi   # then run: pi
 Optional backend override:
 
 ```bash
-export PI_SUBAGENT_MUX=cmux   # or tmux, zellij, wezterm
+export PI_SUBAGENT_MUX=cmux   # or herdr, tmux, zellij, wezterm
 ```
 
 ---
