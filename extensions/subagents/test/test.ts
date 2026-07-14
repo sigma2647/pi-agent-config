@@ -21,6 +21,7 @@ import {
   shellEscape,
   isCmuxAvailable,
   isWezTermAvailable,
+  isUsableHerdrPane,
   parseHerdrPaneCurrent,
   parseHerdrPaneSplit,
   parseCmuxFocusedSnapshot,
@@ -2089,15 +2090,17 @@ describe("subagents widget rendering", () => {
 
 describe("cmux.ts", () => {
   describe("Herdr response parsing", () => {
-    it("parses a focused current pane and JSON or text split output", () => {
+    it("parses current panes regardless of focus and JSON or text split output", () => {
       assert.deepEqual(
         parseHerdrPaneCurrent('{"result":{"pane":{"pane_id":"w1:p9","focused":true}}}'),
         { paneId: "w1:p9", focused: true },
       );
-      assert.deepEqual(
-        parseHerdrPaneCurrent('{"result":{"pane":{"pane_id":"w1:p9","focused":false}}}'),
-        { paneId: "w1:p9", focused: false },
+      const unfocusedPane = parseHerdrPaneCurrent(
+        '{"result":{"pane":{"pane_id":"w1:p9","focused":false}}}',
       );
+      assert.deepEqual(unfocusedPane, { paneId: "w1:p9", focused: false });
+      assert.equal(isUsableHerdrPane(unfocusedPane), true);
+      assert.equal(isUsableHerdrPane(null), false);
       assert.equal(
         parseHerdrPaneSplit('{"result":{"pane":{"pane_id":"w1:p10"}}}'),
         "w1:p10",

@@ -2,15 +2,15 @@
 
 ## Goal
 
-Allow the vendored `subagents` extension to launch and manage asynchronous subagents from a focused Herdr pane.
+Allow the vendored `subagents` extension to launch and manage asynchronous subagents from a Herdr pane.
 
 ## Scope
 
-Add Herdr to the existing mux adapter at `extensions/subagents/pi-extension/subagents/cmux.ts`. The supported lifecycle is: detect a focused parent pane, create a non-focused right split, execute commands in the child pane, send Escape, read output, and close the pane.
+Add Herdr to the existing mux adapter at `extensions/subagents/pi-extension/subagents/cmux.ts`. The supported lifecycle is: detect the current parent pane, create a non-focused right split, execute commands in the child pane, send Escape, read output, and close the pane.
 
 ## Design
 
-`MuxBackend` gains a `herdr` variant. Runtime availability requires both the `herdr` executable and successful parsing of `herdr pane current` with `focused: true`; merely having the executable on `PATH` is insufficient.
+`MuxBackend` gains a `herdr` variant. Runtime availability requires both the `herdr` executable and successful parsing of `herdr pane current`; merely having the executable on `PATH` is insufficient. The command runs inside Pi's own pane, which need not be the terminal's focused pane.
 
 The adapter uses the established Herdr commands from the previous implementation:
 

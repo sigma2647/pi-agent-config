@@ -24,6 +24,10 @@ export function parseHerdrPaneCurrent(raw: string): HerdrPaneSnapshot | null {
   }
 }
 
+export function isUsableHerdrPane(pane: HerdrPaneSnapshot | null): pane is HerdrPaneSnapshot {
+  return pane !== null;
+}
+
 export function parseHerdrPaneSplit(raw: string): string | null {
   try {
     const paneId = (JSON.parse(raw) as { result?: { pane?: { pane_id?: unknown } } })
@@ -100,7 +104,7 @@ function currentHerdrPane(): HerdrPaneSnapshot | null {
 }
 
 function isHerdrRuntimeAvailable(): boolean {
-  return hasCommand("herdr") && currentHerdrPane()?.focused === true;
+  return hasCommand("herdr") && isUsableHerdrPane(currentHerdrPane());
 }
 
 export function isCmuxAvailable(): boolean {
@@ -158,9 +162,9 @@ export function muxSetupHint(): string {
     return "Start pi inside WezTerm.";
   }
   if (pref === "herdr") {
-    return "Start pi inside a focused Herdr pane.";
+    return "Start pi inside a Herdr pane.";
   }
-  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), zellij (`zellij --session pi`, then run `pi`), WezTerm, or a focused Herdr pane.";
+  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), zellij (`zellij --session pi`, then run `pi`), WezTerm, or Herdr.";
 }
 
 function requireMuxBackend(): MuxBackend {
@@ -878,7 +882,7 @@ export function createSurfaceSplit(
 
   if (backend === "herdr") {
     const parentPane = fromSurface ?? currentHerdrPane()?.paneId;
-    if (!parentPane) throw new Error("No focused Herdr pane found");
+    if (!parentPane) throw new Error("No current Herdr pane found");
     const output = execFileSync(
       "herdr",
       ["pane", "split", "--pane", parentPane, "--direction", direction, "--cwd", process.cwd(), "--no-focus"],

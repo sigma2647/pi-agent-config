@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enable asynchronous subagents to run in a focused Herdr pane.
+**Goal:** Enable asynchronous subagents to run in a Herdr pane.
 
 **Architecture:** Extend the existing single mux adapter, `cmux.ts`, with a `herdr` backend. Reuse the prior project's Herdr CLI contract while preserving all current backend behavior. Keep parser tests in the existing unit test file.
 
@@ -13,7 +13,7 @@
 - No new dependency.
 - Do not alter cmux, tmux, Zellij, or WezTerm behavior.
 - Support `PI_SUBAGENT_MUX=herdr`.
-- A usable Herdr target requires a focused `herdr pane current` response.
+- A usable Herdr target requires a parseable `herdr pane current` response.
 - Do not attempt Herdr workspace/tab renaming without a verified CLI contract.
 
 ---
@@ -34,7 +34,7 @@
 Add to `extensions/subagents/test/test.ts`:
 
 ```ts
-it("parses focused Herdr pane responses and split output", () => {
+it("parses Herdr pane responses and split output", () => {
   assert.deepEqual(
     parseHerdrPaneCurrent('{"result":{"pane":{"pane_id":"w1:p9","focused":true}}}'),
     { paneId: "w1:p9", focused: true },
@@ -65,7 +65,7 @@ In `cmux.ts`:
 export type MuxBackend = "cmux" | "tmux" | "zellij" | "wezterm" | "herdr";
 ```
 
-Add parsing and focused-pane availability checks. Add `herdr` branches to surface creation, command execution, Escape, screen reading, and closing using the CLI commands in the design document. Return early from workspace/tab rename functions for Herdr.
+Add parsing and current-pane availability checks. Add `herdr` branches to surface creation, command execution, Escape, screen reading, and closing using the CLI commands in the design document. Return early from workspace/tab rename functions for Herdr.
 
 - [ ] **Step 4: Run the unit suite to verify the implementation**
 

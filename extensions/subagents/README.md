@@ -42,7 +42,7 @@ Start pi inside one of them:
 ```bash
 cmux pi
 # or
-# run pi from a focused Herdr pane
+# run pi from a Herdr pane
 # or
 tmux new -A -s pi 'pi'
 # or
@@ -480,7 +480,7 @@ Every sub-agent session displays a compact tools widget showing available and de
 ```bash
 cmux pi
 # or
-# run pi from a focused Herdr pane
+# run pi from a Herdr pane
 # or
 tmux new -A -s pi 'pi'
 # or
