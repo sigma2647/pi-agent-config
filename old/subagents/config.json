@@ -1,0 +1,8 @@
+{
+  "maxConcurrency": 4,
+  "models": {
+    "researcher": "deepseek/deepseek-v4-flash",
+    "scout": "deepseek/deepseek-v4-flash",
+    "worker": "deepseek/deepseek-v4-flash"
+  }
+}
