@@ -7,6 +7,7 @@ import {
 	buildVisibleShellScript,
 	buildVisibleSubagentUserMessage,
 	chooseVisibleTarget,
+	dispatchVisibleFirst,
 	isFocusedHerdrPane,
 	parseVisibleBackendPreference,
 	parseHerdrPaneCurrent,
@@ -134,4 +135,65 @@ describe("visible subagent helpers", () => {
 		assert.match(resolveVisibleRun(runs, { name: "scout" }).error ?? "", /Ambiguous/);
 		assert.match(resolveVisibleRun(runs, {}).error ?? "", /either `id` or `name`/);
 	});
+
+	it("prefers visible execution in TUI mode", async () => {
+		let syncCalls = 0;
+		const result = await dispatchVisibleFirst({
+			mode: "tui",
+			preferVisible: true,
+			target: { backend: "herdr", paneId: "w1:p2" },
+			launchVisible: async () => "visible",
+			runSync: async () => { syncCalls++; return "sync"; },
+		});
+		assert.deepEqual(result, { dispatchMode: "visible", value: "visible" });
+		assert.equal(syncCalls, 0);
+	});
+
+	it("falls back once when visible execution is unavailable", async () => {
+		for (const testCase of [
+			{ mode: "rpc", target: { backend: "herdr" as const, paneId: "w1:p2" }, reason: /TUI mode/ },
+			{ mode: "tui", target: null, reason: /Herdr\/tmux target/ },
+		]) {
+			let syncCalls = 0;
+			const result = await dispatchVisibleFirst({
+				mode: testCase.mode,
+				preferVisible: true,
+				target: testCase.target,
+				launchVisible: async () => "visible",
+				runSync: async () => { syncCalls++; return "sync"; },
+			});
+			assert.equal(result.dispatchMode, "sync-fallback");
+			assert.match(result.fallbackReason ?? "", testCase.reason);
+			assert.equal(result.value, "sync");
+			assert.equal(syncCalls, 1);
+		}
+	});
+
+	it("falls back once when visible startup throws", async () => {
+		let syncCalls = 0;
+		const result = await dispatchVisibleFirst({
+			mode: "tui",
+			preferVisible: true,
+			target: { backend: "tmux", paneId: "%7" },
+			launchVisible: async () => { throw new Error("split failed"); },
+			runSync: async () => { syncCalls++; return "sync"; },
+		});
+		assert.equal(result.dispatchMode, "sync-fallback");
+		assert.match(result.fallbackReason ?? "", /split failed/);
+		assert.equal(syncCalls, 1);
+	});
+
+	it("runs synchronously without calling visible when explicitly disabled", async () => {
+		let visibleCalls = 0;
+		const result = await dispatchVisibleFirst({
+			mode: "tui",
+			preferVisible: false,
+			target: { backend: "herdr", paneId: "w1:p2" },
+			launchVisible: async () => { visibleCalls++; return "visible"; },
+			runSync: async () => "sync",
+		});
+		assert.deepEqual(result, { dispatchMode: "sync", value: "sync" });
+		assert.equal(visibleCalls, 0);
+	});
 });
+// test

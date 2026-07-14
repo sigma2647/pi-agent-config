@@ -28,6 +28,46 @@ export type VisibleRunLookup<T extends VisibleRunIdentity> =
 	| { run: T; error?: never }
 	| { run?: never; error: string };
 
+export type VisibleFirstDispatch<TVisible, TSync> =
+	| { dispatchMode: "visible"; value: TVisible; fallbackReason?: never }
+	| { dispatchMode: "sync"; value: TSync; fallbackReason?: never }
+	| { dispatchMode: "sync-fallback"; value: TSync; fallbackReason: string };
+
+export async function dispatchVisibleFirst<TVisible, TSync>(options: {
+	mode: string;
+	preferVisible: boolean;
+	target: DetectedVisibleTarget | null;
+	launchVisible: (target: DetectedVisibleTarget) => Promise<TVisible>;
+	runSync: () => Promise<TSync>;
+}): Promise<VisibleFirstDispatch<TVisible, TSync>> {
+	if (!options.preferVisible) {
+		return { dispatchMode: "sync", value: await options.runSync() };
+	}
+
+	let fallbackReason: string;
+	if (options.mode !== "tui") {
+		fallbackReason = `Visible subagents require TUI mode (current: ${options.mode}).`;
+	} else if (!options.target) {
+		fallbackReason = "No supported Herdr/tmux target is available.";
+	} else {
+		try {
+			return {
+				dispatchMode: "visible",
+				value: await options.launchVisible(options.target),
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			fallbackReason = `Visible subagent startup failed: ${message}`;
+		}
+	}
+
+	return {
+		dispatchMode: "sync-fallback",
+		fallbackReason,
+		value: await options.runSync(),
+	};
+}
+
 export function shellEscape(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
