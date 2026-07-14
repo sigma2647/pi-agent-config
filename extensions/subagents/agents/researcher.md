@@ -3,7 +3,7 @@ name: researcher
 description: Web researcher — searches the web and synthesizes findings
 tools: web_search, web_fetch
 deny-tools: claude
-model: anthropic/claude-haiku-4-5
+model: deepseek/deepseek-v4-flash
 spawning: false
 auto-exit: true
 system-prompt: append
