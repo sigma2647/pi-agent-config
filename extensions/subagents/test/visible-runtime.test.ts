@@ -1,14 +1,47 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { readVisiblePing, readVisibleSessionSummary } from "../visible-runtime.ts";
+import {
+	cleanupFailedVisibleLaunch,
+	readVisiblePing,
+	readVisibleSessionSummary,
+} from "../visible-runtime.ts";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("cleanup after failed visible launch", () => {
+	it("cleans temporary files and a created pane after startup failure", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-subagents-failed-launch-"));
+		tempDirs.push(dir);
+		writeFileSync(join(dir, "task.md"), "task");
+		let closedPane: string | null = null;
+
+		cleanupFailedVisibleLaunch(
+			dir,
+			{ backend: "herdr", paneId: "w1:p9" },
+			(target) => { closedPane = target.paneId; },
+		);
+
+		assert.equal(closedPane, "w1:p9");
+		assert.equal(existsSync(dir), false);
+	});
+
+	it("does not let cleanup errors replace the startup error", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-subagents-failed-cleanup-"));
+		tempDirs.push(dir);
+		assert.doesNotThrow(() => cleanupFailedVisibleLaunch(
+			dir,
+			{ backend: "tmux", paneId: "%9" },
+			() => { throw new Error("close failed"); },
+		));
+		assert.equal(existsSync(dir), false);
+	});
 });
 
 describe("visible subagent ping", () => {

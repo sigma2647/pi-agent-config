@@ -41,6 +41,7 @@ import {
 	type VisibleBackend,
 } from "./visible-helpers.ts";
 import {
+	cleanupFailedVisibleLaunch,
 	closeVisiblePane,
 	createVisiblePane,
 	detectVisibleTarget,
@@ -636,79 +637,86 @@ async function launchVisibleSubagent(
 	const interactive = !(agent.autoExit ?? false);
 	const piBin = resolvePiBinary();
 	const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-sub-"));
-	const promptPath = path.join(tempDir, `${agent.name}.md`);
-	const taskPath = path.join(tempDir, "task.md");
-	await fs.promises.writeFile(promptPath, agent.systemPrompt, { encoding: "utf-8", mode: 0o600 });
-	await fs.promises.writeFile(
-		taskPath,
-		interactive
-			? `${task}\n\nWork on this task in the visible pane. The user may continue the conversation with you here. When you have completed the task, give your final concise report and call the subagent_done tool so this pane can close cleanly.`
-			: `${task}\n\nComplete your task autonomously. Your final assistant message should summarize what you accomplished.`,
-		{ encoding: "utf-8", mode: 0o600 },
-	);
-	const files = makeVisibleRunFiles(tempDir);
-	const allowlist: string[] = [];
-	const extensionPaths = new Set<string>([CUSTOM_TOOL_EXTENSIONS.subagent_visible_auto_exit]);
-	const deniedTools = new Set(resolveDeniedTools(agent));
-	for (const tool of agent.tools) {
-		if (deniedTools.has(tool)) continue;
-		if (BUILTIN_TOOLS.has(tool)) {
-			allowlist.push(tool);
-		} else if (CUSTOM_TOOL_EXTENSIONS[tool]) {
-			allowlist.push(tool);
-			extensionPaths.add(CUSTOM_TOOL_EXTENSIONS[tool]);
+	let target: VisibleRunTarget | null = null;
+	try {
+		const promptPath = path.join(tempDir, `${agent.name}.md`);
+		const taskPath = path.join(tempDir, "task.md");
+		await fs.promises.writeFile(promptPath, agent.systemPrompt, { encoding: "utf-8", mode: 0o600 });
+		await fs.promises.writeFile(
+			taskPath,
+			interactive
+				? `${task}\n\nWork on this task in the visible pane. The user may continue the conversation with you here. When you have completed the task, give your final concise report and call the subagent_done tool so this pane can close cleanly.`
+				: `${task}\n\nComplete your task autonomously. Your final assistant message should summarize what you accomplished.`,
+			{ encoding: "utf-8", mode: 0o600 },
+		);
+		const files = makeVisibleRunFiles(tempDir);
+		const allowlist: string[] = [];
+		const extensionPaths = new Set<string>([CUSTOM_TOOL_EXTENSIONS.subagent_visible_auto_exit]);
+		const deniedTools = new Set(resolveDeniedTools(agent));
+		for (const tool of agent.tools) {
+			if (deniedTools.has(tool)) continue;
+			if (BUILTIN_TOOLS.has(tool)) {
+				allowlist.push(tool);
+			} else if (CUSTOM_TOOL_EXTENSIONS[tool]) {
+				allowlist.push(tool);
+				extensionPaths.add(CUSTOM_TOOL_EXTENSIONS[tool]);
+			}
 		}
+		// These lifecycle tools come from visible-auto-exit.ts and must remain
+		// usable even when the agent's own allowlist is deliberately narrow.
+		allowlist.push(...VISIBLE_CONTROL_TOOLS);
+		const args = [...piBin.baseArgs, "--no-skills", "--no-extensions"];
+		if (interactive) args.push("--session", files.sessionFile, "--name", `${agent.name}:${id}`);
+		else args.push("--no-session");
+		if (allowlist.length > 0) args.push("--tools", allowlist.join(","));
+		else args.push("--no-tools");
+		for (const extPath of extensionPaths) {
+			args.push("--extension", extPath);
+		}
+		args.push("--models", agent.model);
+		args.push("--thinking", agent.thinking);
+		args.push("--append-system-prompt", promptPath);
+		args.push(`@${taskPath}`);
+
+		const env = {
+			...buildSubagentEnvOverrides(agent),
+			PI_SUBAGENT_NAME: `${agent.name}:${id}`,
+			PI_DENY_TOOLS: [...deniedTools].join(","),
+			PI_SUBAGENT_AUTO_EXIT: interactive ? "0" : "1",
+			PI_VISIBLE_SUBAGENT_EXIT_FILE: files.exitFile,
+			PI_VISIBLE_SUBAGENT_PING_FILE: files.pingFile,
+		};
+		writeVisibleRunScript(files, cwd, args, env);
+
+		const initialCommand = detected.backend === "tmux"
+			? buildVisiblePaneLaunchCommand(files.scriptPath)
+			: undefined;
+		target = createVisiblePane(detected, cwd, `${agent.name}:${id}`, initialCommand);
+		launchVisibleRun(target, files);
+
+		const run: VisibleSubagentRun = {
+			id,
+			name: `${agent.name}:${id}`,
+			agent: agent.name,
+			task,
+			startTime: Date.now(),
+			target,
+			files,
+			tempDir,
+			model: agent.model,
+			interactive,
+			status: "running",
+		};
+		visibleSubagents.set(id, run);
+		updateVisibleWidget();
+		ensureVisibleWidgetTimer();
+		startVisibleSubagentWatcher(pi, run);
+		return run;
+	} catch (error) {
+		visibleSubagents.delete(id);
+		cleanupFailedVisibleLaunch(tempDir, target);
+		throw error;
 	}
-	// These lifecycle tools come from visible-auto-exit.ts and must remain
-	// usable even when the agent's own allowlist is deliberately narrow.
-	allowlist.push(...VISIBLE_CONTROL_TOOLS);
-	const args = [...piBin.baseArgs, "--no-skills", "--no-extensions"];
-	if (interactive) args.push("--session", files.sessionFile, "--name", `${agent.name}:${id}`);
-	else args.push("--no-session");
-	if (allowlist.length > 0) args.push("--tools", allowlist.join(","));
-	else args.push("--no-tools");
-	for (const extPath of extensionPaths) {
-		args.push("--extension", extPath);
-	}
-	args.push("--models", agent.model);
-	args.push("--thinking", agent.thinking);
-	args.push("--append-system-prompt", promptPath);
-	args.push(`@${taskPath}`);
-
-	const env = {
-		...buildSubagentEnvOverrides(agent),
-		PI_SUBAGENT_NAME: `${agent.name}:${id}`,
-		PI_DENY_TOOLS: [...deniedTools].join(","),
-		PI_SUBAGENT_AUTO_EXIT: interactive ? "0" : "1",
-		PI_VISIBLE_SUBAGENT_EXIT_FILE: files.exitFile,
-		PI_VISIBLE_SUBAGENT_PING_FILE: files.pingFile,
-	};
-	writeVisibleRunScript(files, cwd, args, env);
-
-	const initialCommand = detected.backend === "tmux"
-		? buildVisiblePaneLaunchCommand(files.scriptPath)
-		: undefined;
-	const target = createVisiblePane(detected, cwd, `${agent.name}:${id}`, initialCommand);
-	launchVisibleRun(target, files);
-
-	const run: VisibleSubagentRun = {
-		id,
-		name: `${agent.name}:${id}`,
-		agent: agent.name,
-		task,
-		startTime: Date.now(),
-		target,
-		files,
-		tempDir,
-		model: agent.model,
-		interactive,
-		status: "running",
-	};
-	visibleSubagents.set(id, run);
-	updateVisibleWidget();
-	ensureVisibleWidgetTimer();
-	startVisibleSubagentWatcher(pi, run);
-	return run;
 }
 
 async function resumeVisibleSubagent(

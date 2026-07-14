@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
@@ -122,6 +122,17 @@ export function closeVisiblePane(target: VisibleRunTarget): void {
 		return;
 	}
 	execFileSync("tmux", ["kill-pane", "-t", target.paneId], { encoding: "utf8" });
+}
+
+export function cleanupFailedVisibleLaunch(
+	tempDir: string,
+	target: VisibleRunTarget | null,
+	closePane: (target: VisibleRunTarget) => void = closeVisiblePane,
+): void {
+	if (target) {
+		try { closePane(target); } catch {}
+	}
+	try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
 }
 
 export function sendVisibleEscape(target: VisibleRunTarget): void {
