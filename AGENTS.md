@@ -26,11 +26,11 @@ extensions/
 │   ├── chain.ts         ← backend registry + chain dispatcher
 │   ├── validate.ts      ← relevance filtering (keyword-match results against query)
 │   └── backends/        ← one file per source (brave/exa/opencli/browser)
-├── subagents/           ← active synchronous + visible-pane delegation
-│   ├── index.ts         ← tool/command registration and child orchestration
-│   ├── agents/          ← bundled definitions (scout/researcher/worker)
-│   ├── tools/           ← child-process helpers
-│   └── test/            ← focused Node smoke tests
+├── subagents/           ← vendored pi-interactive-subagents package
+│   ├── package.json     ← pi entrypoint: ./pi-extension/subagents/index.ts
+│   ├── pi-extension/    ← async mux-backed subagent extension implementation
+│   ├── agents/          ← bundled definitions (planner/scout/worker/reviewer/etc.)
+│   └── test/            ← upstream Node smoke/integration tests
 └── _common/             ← shared utilities (playwright resolver, CLI helpers)
 ```
 
@@ -69,7 +69,7 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **`web_search` is general-web only — site-scoped search lives in opencli, not in the chain.** Keyword→list *within a single site* (B站视频/知乎/微博/YouTube/arXiv/BOSS直聘 …) is a different capability than the interchangeable general engines in the `brave → opencli → browser` chain — registering a site-scoped backend there would pollute generic queries (chain stops at first non-empty). opencli already ships these adapters (`opencli list` → e.g. `opencli bilibili search "<kw>" -f json`), and the bilibili **fetch** extractor handles the BV→content half. The agent's discovery gap (it reaches for `web_search` not knowing opencli site-search exists) is closed by a pointer in `web_search`'s `description` + `promptGuidelines` in `web-search/index.ts` — pure text, no routing code, no domain list (points at `opencli list` instead). Do NOT add a bilibili (or any site-scoped) backend to the chain; extend the guideline pointer instead.
 
-**subagents uses one visible-first default.** `subagent` is the normal delegation entry point: in TUI mode it tries Herdr/tmux visible execution first and returns immediately; if visible startup is unavailable or fails, it automatically falls back to the isolated synchronous child and reports the reason. Pass `visible: false` only when synchronous hidden execution is explicitly required. `subagent_visible` remains a compatibility entry point with the same startup fallback behavior. Definitions with `auto-exit: true` close after each non-interrupted autonomous turn, while definitions without `auto-exit: true` stay open until the child calls `subagent_done` (the injected task prompt requires this on completion). `subagent_interrupt` sends Escape without closing the pane. Visible children have a Ctrl+Shift+J tool-access widget plus `subagent_done` and `caller_ping`; either control signal closes the child, while a ping preserves its session and delivers a resumable path to the parent for `subagent_resume`. Ctrl+Shift+S performs a cooperative stop, summarizes the work, returns the result, and closes the child. `subagents_list` discovers definitions with precedence `.pi/agents/` → `~/.pi/agent/agents/` → bundled. Supported frontmatter also includes `cwd`, `deny-tools`, `spawning`, `auto-exit`, and `disable-model-invocation`.
+**subagents is vendored from `pi-interactive-subagents`.** `extensions/subagents` is now a full package, loaded through its own `package.json` (`pi.extensions: ./pi-extension/subagents/index.ts`). It provides async mux-backed subagents (`cmux`/`tmux`/`zellij`/`wezterm`), returns immediately, shows a live widget, and steers completion back to the parent session. `subagents_list` discovers definitions with precedence `.pi/agents/` → `~/.pi/agent/agents/` → bundled. Supported frontmatter includes `cwd`, `deny-tools`, `spawning`, `auto-exit`, `interactive`, `session-mode`, and `disable-model-invocation`.
 
 ## Gotchas
 
