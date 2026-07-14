@@ -37,7 +37,10 @@ import {
 } from "./helpers.ts";
 import {
 	buildVisiblePaneLaunchCommand,
+	buildVisibleSubagentUserMessage,
+	dispatchVisibleFirst,
 	resolveVisibleRun,
+	type DetectedVisibleTarget,
 	type VisibleBackend,
 } from "./visible-helpers.ts";
 import {
@@ -92,9 +95,24 @@ interface AgentResult {
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
 }
 
-interface Details {
-	results: AgentResult[];
+interface VisibleStartedDetails {
+	dispatchMode: "visible";
+	id: string;
+	name: string;
+	agent: string;
+	backend: VisibleBackend;
+	paneId?: string;
+	interactive: boolean;
+	status: "started";
 }
+
+interface SyncDetails {
+	dispatchMode: "sync" | "sync-fallback";
+	results: AgentResult[];
+	fallbackReason?: string;
+}
+
+type Details = VisibleStartedDetails | SyncDetails;
 
 interface VisibleSubagentRun {
 	id: string;
@@ -627,8 +645,11 @@ async function launchVisibleSubagent(
 	agent: AgentConfig,
 	task: string,
 	cwd: string,
+	detected?: DetectedVisibleTarget,
 ): Promise<VisibleSubagentRun> {
-	const detected = detectVisibleTarget(cwd);
+	if (!detected) {
+		detected = detectVisibleTarget(cwd);
+	}
 	if (!detected) {
 		throw new Error("Visible subagent mode requires a supported live mux target (Herdr or tmux).");
 	}
@@ -1022,6 +1043,131 @@ export default function (pi: ExtensionAPI) {
 	};
 	refreshAgents(process.cwd());
 
+	// ── Shared synchronous body ──────────────────────────────────
+
+	async function runSync(
+		agent: AgentConfig,
+		params: { agent: string; task: string; cwd?: string },
+		signal: AbortSignal | undefined,
+		onUpdate: ((update: any) => void) | undefined,
+		ctx: ExtensionContext,
+	): Promise<{ results: AgentResult[] }> {
+		const { provider, modelId } = splitModel(agent.model || "");
+		const registry = (ctx as any).modelRegistry;
+		const contextWindow = provider && modelId && registry?.find
+			? registry.find(provider, modelId)?.contextWindow
+			: undefined;
+
+		const liveResult: AgentResult = {
+			agent: params.agent,
+			task: params.task,
+			output: "",
+			exitCode: -1,
+			model: agent.model,
+			contextWindow,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+			progress: { agent: params.agent, status: "running" as const, task: params.task, recentTools: [], toolCount: 0, tokens: 0, durationMs: 0, lastMessage: "" },
+		};
+
+		const result = await semaphore.run(() =>
+			runSubagent(
+				agent,
+				params.task!,
+				resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd),
+				signal,
+				(progress, usage) => {
+					liveResult.progress = progress;
+					liveResult.usage = { ...usage };
+					onUpdate?.({
+						content: [{ type: "text", text: "(running...)" }],
+						details: { results: [liveResult] },
+					});
+				},
+			),
+		);
+
+		result.contextWindow = contextWindow;
+		return { results: [result] };
+	}
+
+	// ── Shared visible-first executor ────────────────────────────
+
+	async function executeSubagent(
+		params: { agent: string; task: string; cwd?: string },
+		signal: AbortSignal | undefined,
+		onUpdate: ((update: any) => void) | undefined,
+		ctx: ExtensionContext,
+		preferVisible: boolean,
+	): Promise<{ content: Array<{ type: string; text: string }>; details: Details; isError?: boolean }> {
+		if (!params.agent || !params.task) {
+			throw new Error("`subagent` requires both `agent` and `task`. To fan out work, emit multiple `subagent` tool calls in the same turn — they run in parallel.");
+		}
+
+		const agent = agents.find((a) => a.name === params.agent);
+		if (!agent) {
+			const available = agents.map((a) => a.name).join(", ") || "none";
+			throw new Error(`Unknown agent: ${params.agent}. Available agents: ${available}`);
+		}
+
+		const selfSpawnError = getSelfSpawnError(process.env.PI_SUBAGENT_AGENT, params.agent);
+		if (selfSpawnError) {
+			return {
+				content: [{ type: "text", text: selfSpawnError }],
+				details: { dispatchMode: "sync", results: [], fallbackReason: "self-spawn blocked" },
+				isError: true,
+			};
+		}
+
+		const cwd = resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd);
+
+		const dispatch = await dispatchVisibleFirst<
+			VisibleSubagentRun,
+			{ results: AgentResult[] }
+		>({
+			mode: ctx.mode,
+			preferVisible,
+			target: ctx.mode === "tui" && preferVisible ? detectVisibleTarget(cwd) : null,
+			launchVisible: (target) => launchVisibleSubagent(pi, agent, params.task!, cwd, target),
+			runSync: () => runSync(agent, params, signal, onUpdate, ctx),
+		});
+
+		if (dispatch.dispatchMode === "visible") {
+			const run = dispatch.value;
+			return {
+				content: [{
+					type: "text",
+					text: `Started ${run.interactive ? "interactive" : "autonomous"} visible subagent "${run.name}" in ${run.target.backend} pane ${run.target.paneId}.`,
+				}],
+				details: {
+					dispatchMode: "visible",
+					id: run.id,
+					name: run.name,
+					agent: run.agent,
+					backend: run.target.backend,
+					paneId: run.target.paneId,
+					interactive: run.interactive,
+					status: "started",
+				},
+			};
+		}
+
+		const result = dispatch.value.results[0];
+		const isError = result.exitCode !== 0 || !!result.progress.error;
+		const text = dispatch.dispatchMode === "sync-fallback"
+			? `Visible execution unavailable; used synchronous fallback: ${dispatch.fallbackReason}\n\n${result.output || "(no output)"}`
+			: result.output || "(no output)";
+
+		return {
+			content: [{ type: "text", text }],
+			details: {
+				dispatchMode: dispatch.dispatchMode as "sync" | "sync-fallback",
+				results: dispatch.value.results,
+				...(dispatch.dispatchMode === "sync-fallback" ? { fallbackReason: dispatch.fallbackReason } : {}),
+			},
+			...(isError ? { isError: true } : {}),
+		};
+	}
+
 	pi.registerTool({
 		name: "subagent",
 		label: "Subagent",
@@ -1040,69 +1186,13 @@ export default function (pi: ExtensionAPI) {
 			agent: Type.String({ description: "Name of the agent to invoke" }),
 			task: Type.String({ description: "Task description (self-contained — the subagent sees nothing else)" }),
 			cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+			visible: Type.Optional(Type.Boolean({
+				description: "Prefer a visible Herdr/tmux pane; defaults to true. Set false for synchronous hidden execution.",
+			})),
 		}),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			if (!params.agent || !params.task) {
-				throw new Error("`subagent` requires both `agent` and `task`. To fan out work, emit multiple `subagent` tool calls in the same turn — they run in parallel.");
-			}
-
-			const agent = agents.find((a) => a.name === params.agent);
-			if (!agent) {
-				const available = agents.map((a) => a.name).join(", ") || "none";
-				throw new Error(`Unknown agent: ${params.agent}. Available agents: ${available}`);
-			}
-
-			const selfSpawnError = getSelfSpawnError(process.env.PI_SUBAGENT_AGENT, params.agent);
-			if (selfSpawnError) {
-				return {
-					content: [{ type: "text", text: selfSpawnError }],
-					details: { error: "self-spawn blocked" },
-					isError: true,
-				};
-			}
-
-			const { provider, modelId } = splitModel(agent.model || "");
-			const registry = (ctx as any).modelRegistry;
-			const contextWindow = provider && modelId && registry?.find
-				? registry.find(provider, modelId)?.contextWindow
-				: undefined;
-
-			const liveResult: AgentResult = {
-				agent: params.agent,
-				task: params.task,
-				output: "",
-				exitCode: -1,
-				model: agent.model,
-				contextWindow,
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
-				progress: { agent: params.agent, status: "running" as const, task: params.task, recentTools: [], toolCount: 0, tokens: 0, durationMs: 0, lastMessage: "" },
-			};
-
-			const result = await semaphore.run(() =>
-				runSubagent(
-					agent,
-					params.task!,
-					resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd),
-					signal,
-					(progress, usage) => {
-					liveResult.progress = progress;
-					liveResult.usage = { ...usage };
-					onUpdate?.({
-						content: [{ type: "text", text: "(running...)" }],
-						details: { results: [liveResult] },
-					});
-					},
-				),
-			);
-
-			result.contextWindow = contextWindow;
-			const isError = result.exitCode !== 0 || !!result.progress.error;
-			return {
-				content: [{ type: "text", text: result.output || "(no output)" }],
-				details: { results: [result] },
-				...(isError ? { isError: true } : {}),
-			};
+			return executeSubagent(params, signal, onUpdate, ctx, params.visible !== false);
 		},
 
 		renderCall(args, theme, context) {
@@ -1134,7 +1224,20 @@ export default function (pi: ExtensionAPI) {
 
 		renderResult(result, options, theme, context) {
 			const details = result.details as Details | undefined;
-			if (!details?.results?.length) {
+
+			// Visible started result — render as a one-liner
+			if (details?.dispatchMode === "visible") {
+				const v = details as VisibleStartedDetails;
+				const mode = v.interactive ? "interactive" : "autonomous";
+				return new Text(
+					`${theme.fg("accent", "▸")} ${theme.fg("toolTitle", theme.bold(v.name))} ${theme.fg("dim", `— ${mode} · ${v.backend}:${v.paneId}`)}`,
+					0, 0,
+				);
+			}
+
+			// Sync or sync-fallback: render progress boxes
+			const syncDetails = details as SyncDetails | undefined;
+			if (!syncDetails?.results?.length) {
 				const t = result.content[0];
 				const text = t?.type === "text" ? t.text : "(no output)";
 				return new Text(text.slice(0, 200), 0, 0);
@@ -1143,12 +1246,19 @@ export default function (pi: ExtensionAPI) {
 			const w = getTermWidth() - 4;
 			const expanded = options.expanded;
 			const c = new Container();
-			for (const agentResult of details.results) {
+
+			// Prepend fallback warning for sync-fallback
+			if (syncDetails.dispatchMode === "sync-fallback" && syncDetails.fallbackReason) {
+				c.addChild(new Text(theme.fg("warning", `⚠ ${syncDetails.fallbackReason}`), 0, 0));
+				c.addChild(new Spacer(1));
+			}
+
+			for (const agentResult of syncDetails.results) {
 				const failed = agentResult.exitCode !== 0 || agentResult.progress.status === "failed";
 				const box = new Box(1, 1, (text: string) => theme.bg(failed ? "toolErrorBg" : "toolSuccessBg", text));
 				box.addChild(renderAgentProgress(agentResult, theme, expanded, w - 2));
 				c.addChild(box);
-				if (details.results.length > 1) c.addChild(new Spacer(1));
+				if (syncDetails.results.length > 1) c.addChild(new Spacer(1));
 			}
 			return c;
 			},
@@ -1198,43 +1308,8 @@ export default function (pi: ExtensionAPI) {
 				task: Type.String({ description: "Task description (self-contained — the subagent sees nothing else)" }),
 				cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 			}),
-			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				if (!params.agent || !params.task) {
-					throw new Error("`subagent_visible` requires both `agent` and `task`.");
-				}
-
-				const agent = agents.find((a) => a.name === params.agent);
-				if (!agent) {
-					const available = agents.map((a) => a.name).join(", ") || "none";
-					throw new Error(`Unknown agent: ${params.agent}. Available agents: ${available}`);
-				}
-
-				const selfSpawnError = getSelfSpawnError(process.env.PI_SUBAGENT_AGENT, params.agent);
-				if (selfSpawnError) {
-					return {
-						content: [{ type: "text", text: selfSpawnError }],
-						details: { error: "self-spawn blocked" },
-						isError: true,
-					};
-				}
-
-				const cwd = resolveAgentCwd(ctx.cwd, params.cwd, agent.cwd);
-				const run = await launchVisibleSubagent(pi, agent, params.task, cwd);
-				return {
-					content: [{
-						type: "text",
-						text: `Started ${run.interactive ? "interactive" : "autonomous"} visible subagent "${run.name}" in ${run.target.backend} pane ${run.target.paneId}.`,
-					}],
-					details: {
-						id: run.id,
-						name: run.name,
-						agent: run.agent,
-						backend: run.target.backend,
-						paneId: run.target.paneId,
-						interactive: run.interactive,
-						status: "started",
-					},
-				};
+			async execute(_toolCallId, params, signal, onUpdate, ctx) {
+				return executeSubagent(params, signal, onUpdate, ctx, true);
 			},
 			renderCall(args, theme) {
 				const agent = args.agent ? theme.fg("accent", String(args.agent)) : "(unknown)";
@@ -1247,16 +1322,24 @@ export default function (pi: ExtensionAPI) {
 				);
 			},
 			renderResult(result, _options, theme) {
-				const details = result.details as { name?: string; backend?: VisibleBackend; paneId?: string; interactive?: boolean; status?: string } | undefined;
-				if (details?.status === "started") {
-					const mode = details.interactive ? "interactive" : "autonomous";
+				const details = result.details as Details | undefined;
+
+				// Visible started result
+				if (details?.dispatchMode === "visible" && details.status === "started") {
+					const v = details as VisibleStartedDetails;
+					const mode = v.interactive ? "interactive" : "autonomous";
 					return new Text(
-						`${theme.fg("accent", "▸")} ${theme.fg("toolTitle", theme.bold(details.name ?? "subagent"))} ${theme.fg("dim", `— ${mode} · ${details.backend}:${details.paneId}`)}`,
+						`${theme.fg("accent", "▸")} ${theme.fg("toolTitle", theme.bold(v.name))} ${theme.fg("dim", `— ${mode} · ${v.backend}:${v.paneId}`)}`,
 						0,
 						0,
 					);
 				}
-				const text = typeof result.content[0]?.text === "string" ? result.content[0].text : "";
+
+				// Sync or sync-fallback: render text content directly
+				let text = typeof result.content[0]?.text === "string" ? result.content[0].text : "";
+				if (details?.dispatchMode === "sync-fallback" && (details as SyncDetails).fallbackReason) {
+					text = `${theme.fg("warning", `⚠ ${(details as SyncDetails).fallbackReason}`)}\n\n${text}`;
+				}
 				return new Text(text, 0, 0);
 			},
 		});
@@ -1283,10 +1366,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				const taskText = parsed.task || `You are the ${parsed.agentName} agent. Wait for instructions.`;
-				const cwd = resolveAgentCwd(ctx.cwd, undefined, agent.cwd);
-				const run = await launchVisibleSubagent(pi, agent, taskText, cwd);
-				ctx.ui.notify(`Started ${run.interactive ? "interactive" : "autonomous"} visible subagent "${run.name}" in ${run.target.backend} pane ${run.target.paneId}.`, "info");
+				pi.sendUserMessage(buildVisibleSubagentUserMessage(parsed.agentName, parsed.task));
 			},
 		});
 
