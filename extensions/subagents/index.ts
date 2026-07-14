@@ -1172,10 +1172,11 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent",
 		label: "Subagent",
 		description:
-			"Run a subagent to complete a task. Subagents have NO context from the current conversation — include all necessary context in the task description. " +
+			"Use subagent as the normal delegation entry point. In TUI mode it prefers a visible Herdr/tmux pane and returns immediately; when visible startup is unavailable it automatically runs synchronously and reports why. After a visible start, wait for the later completion message and do not invent results. Subagents have NO context from the current conversation — include all necessary context in the task description. " +
 			"Available agents: " + (agents.map((a) => `${a.name} (${a.description})`).join("; ") || "none"),
 		promptSnippet: "Run subagents for delegated tasks",
 		promptGuidelines: [
+			"Use subagent as the normal delegation entry point. In TUI mode it prefers a visible Herdr/tmux pane and returns immediately; when visible startup is unavailable it automatically runs synchronously and reports why.",
 			"Parallel tool calls are your primary parallelism mechanism — put multiple independent read/fetch/search calls in one tool-call block. Don't use subagents to parallelize simple I/O.",
 			"Use subagent to delegate *reasoning and decisions*: codebase exploration (scout), web research (researcher), or isolated code changes (worker).",
 			"For multiple independent subagent tasks, emit multiple `subagent` tool calls in the same turn — they run in parallel automatically (capped at maxConcurrency).",
@@ -1294,10 +1295,10 @@ export default function (pi: ExtensionAPI) {
 			name: "subagent_visible",
 			label: "Visible Subagent",
 			description:
-				"Spawn a visible subagent in a Herdr/tmux pane. This returns immediately; the pane runs in the background and the result is delivered back later.",
+				"Compatibility alias for `subagent` that also uses visible-first startup. In TUI mode it spawns a visible Herdr/tmux pane and returns immediately; if visible startup is unavailable it falls back to synchronous execution and reports the reason.",
 			promptSnippet: "Spawn a visible background subagent in a Herdr/tmux pane",
 			promptGuidelines: [
-				"Use this only when a visible live pane is useful. For ordinary delegated work, prefer `subagent`.",
+				"Use this only when a visible live pane is useful. `subagent` has the same visible-first behavior.",
 				"This tool returns immediately. Do not invent results after calling it; wait for the later completion message.",
 				"Agent definitions with `auto-exit: true` run autonomously and close after their final answer. When omitted or false, the pane stays open for interaction and the agent must call `subagent_done`.",
 				"For multiple independent visible tasks, emit multiple `subagent_visible` tool calls in the same turn.",
