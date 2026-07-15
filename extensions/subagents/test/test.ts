@@ -24,6 +24,7 @@ import {
   isUsableHerdrPane,
   parseHerdrPaneCurrent,
   parseHerdrPaneSplit,
+  mergeHerdrScreenSources,
   parseCmuxFocusedSnapshot,
   parseCmuxFocusedSnapshotFromJson,
   parseCmuxJson,
@@ -52,7 +53,7 @@ import {
   getSubagentActivityFile,
   readSubagentActivityFile,
 } from "../pi-extension/subagents/activity.ts";
-import {
+import subagentDoneExtension, {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
   findLatestAssistantError,
@@ -1220,6 +1221,45 @@ describe("subagent discovery", () => {
   });
 });
 describe("subagent-done.ts", () => {
+  it("writes a done sidecar before normal auto-exit shutdown", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const previousAutoExit = process.env.PI_SUBAGENT_AUTO_EXIT;
+      const previousSession = process.env.PI_SUBAGENT_SESSION;
+      const handlers = new Map<string, Function>();
+      let shutdown = false;
+
+      process.env.PI_SUBAGENT_AUTO_EXIT = "1";
+      process.env.PI_SUBAGENT_SESSION = sessionFile;
+
+      try {
+        subagentDoneExtension({
+          on(event: string, handler: Function) {
+            handlers.set(event, handler);
+          },
+          getAllTools() {
+            return [];
+          },
+          registerShortcut() {},
+          registerTool() {},
+        } as any);
+
+        handlers.get("agent_end")!(
+          { messages: [{ role: "assistant", stopReason: "stop" }] },
+          { shutdown: () => { shutdown = true; } },
+        );
+
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
+        assert.equal(shutdown, true);
+      } finally {
+        if (previousAutoExit === undefined) delete process.env.PI_SUBAGENT_AUTO_EXIT;
+        else process.env.PI_SUBAGENT_AUTO_EXIT = previousAutoExit;
+        if (previousSession === undefined) delete process.env.PI_SUBAGENT_SESSION;
+        else process.env.PI_SUBAGENT_SESSION = previousSession;
+      }
+    });
+  });
+
   describe("shouldMarkUserTookOver", () => {
     it("ignores the initial injected task before the first agent run", () => {
       assert.equal(shouldMarkUserTookOver(false), false);
@@ -2112,6 +2152,11 @@ describe("cmux.ts", () => {
       assert.equal(parseHerdrPaneCurrent("not json"), null);
       assert.equal(parseHerdrPaneCurrent('{"result":{"pane":{"focused":true}}}'), null);
       assert.equal(parseHerdrPaneSplit('{"result":{"pane":{}}}'), null);
+    });
+
+    it("includes the visible viewport when recent scrollback is empty", () => {
+      const screen = mergeHerdrScreenSources("", "__SUBAGENT_DONE_0__\n%", 5);
+      assert.match(screen, /__SUBAGENT_DONE_0__/);
     });
   });
 

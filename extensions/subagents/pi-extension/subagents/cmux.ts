@@ -201,6 +201,12 @@ function tailLines(text: string, lines: number): string {
   return split.slice(-lines).join("\n");
 }
 
+// Herdr's recent-unwrapped source excludes the current viewport.
+export function mergeHerdrScreenSources(recent: string, visible: string, lines: number): string {
+  const combined = [recent.trimEnd(), visible.trimEnd()].filter(Boolean).join("\n");
+  return tailLines(combined, lines);
+}
+
 function zellijPaneId(surface: string): string {
   return surface.startsWith("pane:") ? surface.slice("pane:".length) : surface;
 }
@@ -1203,11 +1209,17 @@ export function readScreen(surface: string, lines = 50): string {
   }
 
   if (backend === "herdr") {
-    return execFileSync(
+    const recent = execFileSync(
       "herdr",
       ["pane", "read", surface, "--source", "recent-unwrapped", "--lines", String(lines), "--format", "text"],
       { encoding: "utf8" },
     );
+    const visible = execFileSync(
+      "herdr",
+      ["pane", "read", surface, "--source", "visible", "--format", "text"],
+      { encoding: "utf8" },
+    );
+    return mergeHerdrScreenSources(recent, visible, lines);
   }
 
   if (backend === "tmux") {
@@ -1257,12 +1269,19 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
   }
 
   if (backend === "herdr") {
-    const { stdout } = await execFileAsync(
-      "herdr",
-      ["pane", "read", surface, "--source", "recent-unwrapped", "--lines", String(lines), "--format", "text"],
-      { encoding: "utf8" },
-    );
-    return stdout;
+    const [recent, visible] = await Promise.all([
+      execFileAsync(
+        "herdr",
+        ["pane", "read", surface, "--source", "recent-unwrapped", "--lines", String(lines), "--format", "text"],
+        { encoding: "utf8" },
+      ),
+      execFileAsync(
+        "herdr",
+        ["pane", "read", surface, "--source", "visible", "--format", "text"],
+        { encoding: "utf8" },
+      ),
+    ]);
+    return mergeHerdrScreenSources(recent.stdout, visible.stdout, lines);
   }
 
   if (backend === "tmux") {
