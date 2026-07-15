@@ -62,6 +62,23 @@ the upstream library's docs in one turn. Don't serialize independent work.
 - **Re-scouting code you already scouted** — reuse the context you have.
 - Remember: **subagents inherit NO context.** Put every needed file path, pattern, constraint, and expected output format into the task description.
 
+## Dispatch Safety
+
+Follow this contract exactly:
+
+| Situation | Required action |
+|-----------|-----------------|
+| Normal spawn | Omit `model`; use the agent definition's configured model. |
+| A user or workflow requires a model override | Run `pi --list-models`, then copy an exact available `provider/model` pair into `model`. Never infer one from the parent model or memory. |
+| Stop a running child turn | Use `subagent_interrupt`. |
+| Resume a child | Use `subagent_resume`. |
+| Autonomous child completed | Do nothing; the extension closes its pane automatically. If the widget remains, report it as stale rather than trying another control plane. |
+| Read-only mux diagnosis | First identify the backend from `PI_SUBAGENT_MUX` and runtime environment variables. |
+
+There is no `subagent_close` tool. Do not substitute raw `tmux`, `herdr`,
+`cmux`, `zellij`, or `wezterm` lifecycle commands; the extension owns pane
+creation and closure.
+
 ## Implementation Discipline
 
 **Keep it simple.** Only make changes directly requested or clearly necessary.

@@ -1095,6 +1095,19 @@ describe("subagent discovery", () => {
     assert.equal(testApi.buildSubagentToolAllowlist(""), null);
   });
 
+  it("rejects bare Pi model overrides before launch", () => {
+    assert.throws(
+      () => testApi.validateModelOverride("deepseek-v4-flash", undefined),
+      /must use an exact provider\/model reference/,
+    );
+  });
+
+  it("allows canonical Pi model overrides and bare Claude aliases", () => {
+    assert.doesNotThrow(() => testApi.validateModelOverride("deepseek/deepseek-v4-flash", undefined));
+    assert.doesNotThrow(() => testApi.validateModelOverride("sonnet", "claude"));
+    assert.doesNotThrow(() => testApi.validateModelOverride(undefined, undefined));
+  });
+
   it("buildPiPromptArgs inserts separator for artifact-backed launches with skills", () => {
     assert.deepEqual(
       testApi.buildPiPromptArgs({ effectiveSkills: "review,lint", taskDelivery: "artifact", taskArg: "@artifact.md" }),

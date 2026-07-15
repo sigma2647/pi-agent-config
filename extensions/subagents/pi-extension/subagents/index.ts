@@ -96,7 +96,12 @@ const SubagentParams = Type.Object({
   systemPrompt: Type.Optional(
     Type.String({ description: "Appended to system prompt (role instructions)" }),
   ),
-  model: Type.Optional(Type.String({ description: "Model override (overrides agent default)" })),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Model override. For Pi agents, use an exact provider/model from `pi --list-models`; omit to use the agent default. Bare aliases are only supported for Claude CLI agents.",
+    }),
+  ),
   skills: Type.Optional(
     Type.String({ description: "Comma-separated skills (overrides agent default)" }),
   ),
@@ -892,6 +897,18 @@ function resolveResumeLaunchBehavior(params: { autoExit?: boolean }): { autoExit
   return { autoExit, interactive: !autoExit };
 }
 
+function validateModelOverride(model: string | undefined, cli: string | undefined): void {
+  if (!model || cli === "claude") return;
+
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) {
+    throw new Error(
+      `Model override "${model}" must use an exact provider/model reference from \`pi --list-models\` ` +
+        `(for example, "deepseek/deepseek-v4-flash"). Omit model to use the agent default.`,
+    );
+  }
+}
+
 export const __test__ = {
   borderLine,
   getShellReadyDelayMs,
@@ -911,6 +928,7 @@ export const __test__ = {
   handleSubagentInterrupt,
   resolveResultPresentation,
   resolveResumeLaunchBehavior,
+  validateModelOverride,
   runningSubagents,
   formatElapsed,
 };
@@ -939,6 +957,7 @@ async function launchSubagent(
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
+  validateModelOverride(params.model, agentDefs?.cli);
   const effectiveModel = params.model ?? agentDefs?.model;
   const effectiveTools = params.tools ?? agentDefs?.tools;
   const effectiveSkills = params.skills ?? agentDefs?.skills;
