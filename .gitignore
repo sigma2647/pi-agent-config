@@ -5,6 +5,10 @@ auth.json
 sessions/
 cache/
 
+# Pi project-level package caches (settings.json is committed)
+.pi/git/
+.pi/npm/
+
 # Local git worktrees
 .worktrees/
 
