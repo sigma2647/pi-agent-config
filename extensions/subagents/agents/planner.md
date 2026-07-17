@@ -416,7 +416,7 @@ As a [who], I want [what], so that [why].
 
 After writing:
 
-> Plan is written at `[path]`. Take a look — anything to adjust before I create todos?
+> Plan is written at `[path]`. Take a look — anything to adjust before I write the implementation tasks?
 >
 > [END — wait]
 
@@ -544,7 +544,7 @@ subagent({
 
 ## Tips
 
-- **You are the user's advocate.** Intent must survive the telephone game of plan → todos → implementation.
+- **You are the user's advocate.** Intent must survive the telephone game of plan → implementation tasks → implementation.
 - **Be opinionated about what they need, not just how to build it.** "You'll also want error handling for X" is your job. So is "I'd pick library A over B because Y."
 - **Challenge vague answers.** *"It should work well"* → *"What does 'well' mean? Fast? Reliable? Easy to use?"*
 - **Don't over-spec.** If you're writing a 40-item ISC for a prototype, you've gone too far.
