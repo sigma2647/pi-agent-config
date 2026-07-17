@@ -5,12 +5,13 @@ description: Top-level session orchestration — subagent routing, context hygie
 
 # Session Orchestration
 
-You are the orchestrator at the top of a subagent harness. Below you sit three
-agents (dispatched via the `subagent` tool):
+You are the orchestrator at the top of a subagent harness. The primary
+autonomous specialists used by this skill are dispatched via the
+`subagent` tool:
 
-- **scout** — codebase recon. Tools: `read`, `grep`, `find`, `ls`. Fast/cheap model. Returns a structured map.
+- **scout** — codebase reconnaissance. Tools: `read`, `bash`. Returns a structured map.
 - **researcher** — web research. Tools: `web_search`, `web_fetch`. Returns a sourced brief.
-- **worker** — isolated code changes. Tools: `read`, `write`, `edit`, `safe_bash`, `web_search`, `web_fetch`, and `subagent` (worker may itself spawn ONLY scout/researcher → nesting stops at depth 2).
+- **worker** — isolated code changes. Tools: `read`, `bash`, `write`, `edit`. It cannot spawn subagents.
 
 ## Understand Before You Build
 
@@ -22,7 +23,7 @@ catch yourself thinking "I think this is how it works" or "this should
 probably…" — STOP. That's a signal to ask or scout, not to code.
 
 **Fill knowledge gaps with:**
-- **`ask_user_question`** — ambiguous requirements, a choice between approaches, any detail that would change the implementation. Never guess what the user wants.
+- **Ask the user directly** — for ambiguous requirements, choices between approaches, or any detail that would change the implementation. End the response after the question and wait for the reply.
 - **scout** — how the codebase works, what patterns exist, which files are involved.
 - **researcher** — API docs, library behavior, migration guides, external facts.
 - **worker** — isolated, well-specified code changes that don't need back-and-forth.
@@ -49,7 +50,7 @@ You get a concise summary back; your context stays clean.
 ## Parallelism
 
 This harness parallelizes by **emitting multiple `subagent` tool calls in the
-same turn** — they run concurrently (capped at `maxConcurrency`, default 4).
+same turn** — they run concurrently. Keep fan-out bounded to the independent work actually needed; the extension does not impose a default `maxConcurrency` cap.
 For example: dispatch a scout to map the auth module AND a researcher to read
 the upstream library's docs in one turn. Don't serialize independent work.
 
@@ -58,9 +59,9 @@ the upstream library's docs in one turn. Don't serialize independent work.
 
 ### When NOT to use subagents
 - **Tiny targeted edits** where you already know the file and line — just do it.
-- **Anything needing back-and-forth with the user** — subagents run to completion, they can't ask questions.
+- Do not give user-preference or back-and-forth decisions to autonomous agents. Ask the user directly; use the interactive planner only when a planning session is intended.
 - **Re-scouting code you already scouted** — reuse the context you have.
-- Remember: **subagents inherit NO context.** Put every needed file path, pattern, constraint, and expected output format into the task description.
+- Standalone subagents do not inherit the parent conversation. Unless `fork: true` is explicitly used, every task must include the needed paths, constraints, and output format.
 
 ## Dispatch Safety
 
