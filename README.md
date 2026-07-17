@@ -21,3 +21,6 @@ fresh-machine setup.
 
 
 pi-hypa
+
+RTK
+https://github.com/rtk-ai/rtk
