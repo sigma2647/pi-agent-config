@@ -2463,3 +2463,30 @@ describe("cmux.ts", () => {
     });
   });
 });
+
+describe("bundled workflow prompts", () => {
+  const workflowPromptPaths = [
+    new URL("../agents/planner.md", import.meta.url),
+    new URL("../agents/worker.md", import.meta.url),
+    new URL("../pi-extension/subagents/plan-skill.md", import.meta.url),
+  ];
+
+  it("does not require optional todo or commit resources", () => {
+    const patterns = [/\btodo\s*\(/, /\/skill:commit\b/, /\bwrite-todos\b/];
+    const failures: string[] = [];
+
+    for (const path of workflowPromptPaths) {
+      const content = readFileSync(path, "utf8");
+      for (const pattern of patterns) {
+        const match = content.match(pattern);
+        if (match) {
+          failures.push(`${path.pathname}: found "${match[0]}" at index ${match.index}`);
+        }
+      }
+    }
+
+    if (failures.length > 0) {
+      assert.fail(`Optional resource references found:\n${failures.join("\n")}`);
+    }
+  });
+});

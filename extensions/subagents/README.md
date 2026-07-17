@@ -84,12 +84,12 @@ Subagent panes are created without stealing keyboard focus (cmux, tmux). Launch 
 
 | Agent             | Model                  | Role                                                                                     |
 | ----------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| **planner**       | Opus (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans, creates todos |
-| **scout**         | Haiku                  | Fast codebase reconnaissance — maps files, patterns, conventions                         |
-| **researcher**    | Haiku                  | Searches the web and synthesizes focused, sourced findings                               |
-| **worker**        | Sonnet                 | Implements tasks from todos — writes code, runs tests, makes polished commits            |
-| **reviewer**      | Opus (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
-| **visual-tester** | Sonnet                 | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
+| **planner**       | DeepSeek V4 Pro (medium thinking) | Brainstorming — clarifies requirements, explores approaches, writes plans with implementation tasks |
+| **scout**         | DeepSeek V4 Flash      | Fast codebase reconnaissance — maps files, patterns, conventions                         |
+| **researcher**    | DeepSeek V4 Flash      | Searches the web and synthesizes focused, sourced findings                               |
+| **worker**        | DeepSeek V4 Flash (minimal thinking) | Implements well-scoped tasks — writes code, runs tests, and reports verified results     |
+| **reviewer**      | DeepSeek V4 Pro (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
+| **visual-tester** | DeepSeek V4 Flash      | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
 
 Agent discovery follows priority: **project-local** (`.pi/agents/`) > **global** (`~/.pi/agent/agents/`) > **package-bundled**. Override any bundled agent by placing your own version in the higher-priority location.
 
@@ -247,8 +247,8 @@ The `/plan` command orchestrates a full planning-to-implementation pipeline.
 ```
 Phase 1: Investigation    → Quick codebase scan
 Phase 2: Planning         → Interactive planner subagent (user collaborates)
-Phase 3: Review Plan      → Confirm todos, adjust if needed
-Phase 4: Execute          → Scout + sequential workers implement todos
+Phase 3: Review Plan      → Confirm plan and implementation tasks, adjust if needed
+Phase 4: Execute          → Scout + sequential workers implement plan tasks
 Phase 5: Review           → Reviewer subagent checks all changes
 ```
 
@@ -462,7 +462,7 @@ Every sub-agent session displays a compact tools widget showing available and de
 ```
 [scout] — 12 tools · 4 denied  (Ctrl+J)              ← collapsed
 [scout] — 12 available  (Ctrl+J to collapse)          ← expanded
-  read, bash, edit, write, todo, ...
+  read, bash, edit, write, ...
   denied: subagent, subagents_list, ...
 ```
 

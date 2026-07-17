@@ -10,7 +10,7 @@ description: >
 
 # Plan
 
-A planning workflow. A scout maps the relevant codebase, then an interactive planner clarifies intent + requirements and designs the technical approach, producing a `plan.md` and todos.
+A planning workflow. A scout maps the relevant codebase, then an interactive planner clarifies intent + requirements and designs the technical approach, producing a `plan.md` with implementation tasks.
 
 **Announce at start:** "Let me take a quick look, then I'll send a scout to map the codebase before we start the planning session."
 
@@ -23,13 +23,13 @@ Phase 1: Quick Assessment (main session — 30s orientation)
     ↓
 Phase 2: Scout (autonomous — codebase context)
     ↓
-Phase 3: Spawn Planner Agent (interactive — clarifies WHAT, plans HOW, creates todos)
+Phase 3: Spawn Planner Agent (interactive — clarifies WHAT, plans HOW, writes implementation tasks)
     ↓
     (Planner may spawn its own scouts/researchers mid-session as needed)
     ↓
-Phase 4: Review Plan & Todos (main session)
+Phase 4: Review Plan (main session)
     ↓
-Phase 5: Execute Todos (workers — receive plan + scout context)
+Phase 5: Execute Implementation Tasks (workers — receive plan + scout context)
     ↓
 Phase 6: Review
 ```
@@ -84,7 +84,7 @@ The planner can spawn **additional** scouts or researchers mid-session if it hit
 
 ## Phase 3: Spawn Planner Agent
 
-Spawn the interactive planner with the scout's context and the user's request. The planner handles everything from here: clarifying intent, compact requirements engineering, ISC, approach exploration, design validation, premortem, plan artifact, and todos.
+Spawn the interactive planner with the scout's context and the user's request. The planner handles everything from here: clarifying intent, compact requirements engineering, ISC, approach exploration, design validation, premortem, plan artifact, and implementation tasks.
 
 ```typescript
 subagent({
@@ -97,13 +97,13 @@ Scout context:
 [paste scout findings here — file structure, conventions, patterns, relevant code]
 
 Save the final plan to: .pi/plans/YYYY-MM-DD-<name>/plan.md
-Create todos tagged with: <name>`,
+Include implementation tasks in the plan tagged with: <name>`,
 });
 ```
 
-**The user works with the planner.** It will clarify requirements lightly (1-2 rounds of questions, not a deep spec session), propose approaches, validate the design, run a premortem, write the plan, and create todos with mandatory code examples.
+**The user works with the planner.** It will clarify requirements lightly (1-2 rounds of questions, not a deep spec session), propose approaches, validate the design, run a premortem, write the plan, and write implementation tasks with mandatory code examples.
 
-When done, the user presses Ctrl+D and the plan + todos are returned to the main session.
+When done, the user presses Ctrl+D and the plan with implementation tasks are returned to the main session.
 
 ### The planner may spawn its own specialists
 
@@ -129,13 +129,9 @@ Fold the new context into the worker tasks.
 
 ---
 
-## Phase 4: Review Plan & Todos
+## Phase 4: Review Plan
 
-Once the planner closes, read the plan and list todos:
-
-```typescript
-todo({ action: "list" });
-```
+Once the planner closes, read the `## Implementation Tasks` section of the plan.
 
 Review with the user:
 
@@ -143,23 +139,23 @@ Review with the user:
 
 ---
 
-## Phase 5: Execute Todos
+## Phase 5: Execute Implementation Tasks
 
 Spawn workers sequentially. Each worker gets the plan path and scout context:
 
 ```typescript
-// Workers execute todos sequentially — one at a time
+// Workers execute tasks sequentially — one at a time
 subagent({
   name: "🔨 Worker 1/N",
   agent: "worker",
-  task: "Implement TODO-xxxx. Mark the todo as done. Plan: [plan path]\n\nScout context: [paste scout summary from Phase 2, plus any re-scout from Phase 3]",
+  task: "Implement Task 1 from [plan path]. Read the task section and follow its files, references, constraints, and acceptance criteria.\n\nScout context: [summary]",
 });
 
-// Check result, then next todo
+// Check result, then next task
 subagent({
   name: "🔨 Worker 2/N",
   agent: "worker",
-  task: "Implement TODO-yyyy. Mark the todo as done. Plan: [plan path]\n\nScout context: [paste scout summary]",
+  task: "Implement Task 2 from [plan path]. Read the task section and follow its files, references, constraints, and acceptance criteria.\n\nScout context: [summary]",
 });
 ```
 
@@ -169,7 +165,7 @@ subagent({
 
 ## Phase 6: Review
 
-After all todos are complete:
+After all implementation tasks are complete:
 
 ```typescript
 subagent({
@@ -182,12 +178,12 @@ subagent({
 
 Triage findings:
 
-- **P0** — Real bugs, security issues → fix now
-- **P1** — Genuine traps, maintenance dangers → fix before merging
+- **P0** — Real bugs, security issues → spawn corrective worker tasks immediately
+- **P1** — Genuine traps, maintenance dangers → spawn corrective worker tasks before merging
 - **P2** — Minor issues → fix if quick, note otherwise
 - **P3** — Nits → skip
 
-Create todos for P0/P1, run workers to fix, re-review only if fixes were substantial.
+Create explicit corrective worker tasks for P0/P1 findings, run workers to fix, re-review only if fixes were substantial.
 
 ---
 
@@ -197,7 +193,6 @@ Before reporting done:
 
 1. ✅ Scout ran before the planner?
 2. ✅ Scout context was passed to the planner?
-3. ✅ All worker todos closed?
-4. ✅ Every todo has a polished commit (using the `commit` skill)?
-5. ✅ Reviewer has run?
-6. ✅ Reviewer findings triaged and addressed?
+3. ✅ All plan implementation tasks completed and verified?
+4. ✅ Reviewer has run?
+5. ✅ Reviewer findings triaged and addressed?
