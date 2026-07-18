@@ -1,6 +1,6 @@
 {
   "packages": [
     "npm:pi-agent-browser-native",
-    "git:github.com/DietrichGebert/ponytail",
+    "git:github.com/DietrichGebert/ponytail"
   ]
 }
