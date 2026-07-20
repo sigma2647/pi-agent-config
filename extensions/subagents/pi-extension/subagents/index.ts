@@ -282,6 +282,25 @@ function discoverAgentDefinitions(): ListedAgentDefinition[] {
   return [...agents.values()];
 }
 
+function getAvailableAgentDefinitions(): ListedAgentDefinition[] {
+  return discoverAgentDefinitions()
+    .filter((agent) => !agent.disableModelInvocation)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getAgentCompletions(prefix: string) {
+  if (/\s/.test(prefix)) return null;
+  const items = getAvailableAgentDefinitions()
+    .filter((agent) => agent.name.startsWith(prefix))
+    .map((agent) => ({ value: agent.name, label: agent.name, description: agent.description }));
+  return items.length > 0 ? items : null;
+}
+
+function formatAvailableAgents(): string {
+  const names = getAvailableAgentDefinitions().map((agent) => agent.name);
+  return `Available agents: ${names.length > 0 ? names.join(", ") : "none"}`;
+}
+
 function resolveSubagentPaths(
   params: Static<typeof SubagentParams>,
   agentDefs: AgentDefaults | null,
@@ -1380,6 +1399,26 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // Capture the UI context for widget updates
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
+    const addAutocompleteProvider = (ctx.ui as any).addAutocompleteProvider;
+    if (typeof addAutocompleteProvider !== "function") return;
+    addAutocompleteProvider.call(ctx.ui, (current: any) => ({
+      async getSuggestions(lines: string[], line: number, col: number, options: any) {
+        const beforeCursor = (lines[line] ?? "").slice(0, col);
+        const match = options.force ? beforeCursor.match(/^\/subagent\s+([^\s]*)$/) : null;
+        if (!match) return current.getSuggestions(lines, line, col, options);
+        const prefix = match[1] ?? "";
+        const items = getAgentCompletions(prefix);
+        return items ? { prefix, items } : null;
+      },
+      applyCompletion: (lines: string[], line: number, col: number, item: any, prefix: string) =>
+        current.applyCompletion(lines, line, col, item, prefix),
+      shouldTriggerFileCompletion(lines: string[], line: number, col: number) {
+        const beforeCursor = (lines[line] ?? "").slice(0, col);
+        return /^\/subagent\s+[^\s]*$/.test(beforeCursor)
+          ? true
+          : (current.shouldTriggerFileCompletion?.(lines, line, col) ?? true);
+      },
+    }));
   });
 
   // Clean up on session shutdown
@@ -1997,11 +2036,26 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // /subagent command — spawn a subagent by name
   pi.registerCommand("subagent", {
     description: "Spawn a subagent: /subagent <agent> <task>",
+    getArgumentCompletions: getAgentCompletions,
     handler: async (args, ctx) => {
-      const trimmed = args.trim();
+      let trimmed = args.trim();
       if (!trimmed) {
-        ctx.ui.notify("Usage: /subagent <agent> [task]", "warning");
-        return;
+        const agents = getAvailableAgentDefinitions();
+        if (!ctx.hasUI || agents.length === 0) {
+          ctx.ui.notify(`Usage: /subagent <agent> [task]\n${formatAvailableAgents()}`, "warning");
+          return;
+        }
+
+        const choices = agents.map((agent) =>
+          agent.description ? `${agent.name} — ${agent.description}` : agent.name,
+        );
+        const selected = await ctx.ui.select("Select a subagent", choices);
+        if (!selected) return;
+        const agentName = agents[choices.indexOf(selected)]?.name;
+        if (!agentName) return;
+        const task = await ctx.ui.input(`Task for ${agentName}`, "Describe the task");
+        if (task === undefined) return;
+        trimmed = `${agentName} ${task}`.trim();
       }
 
       const spaceIdx = trimmed.indexOf(" ");
@@ -2010,10 +2064,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
       const defs = loadAgentDefaults(agentName);
       if (!defs) {
-        ctx.ui.notify(
-          `Agent "${agentName}" not found in ~/.pi/agent/agents/ or .pi/agents/`,
-          "error",
-        );
+        ctx.ui.notify(`Agent "${agentName}" not found.\n${formatAvailableAgents()}`, "error");
         return;
       }
 

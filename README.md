@@ -8,7 +8,7 @@ dotfiles because they are executable code assets.
 
 - `extensions/web-fetch/` — URL extraction and Markdown conversion (`pi-wf`).
 - `extensions/web-search/` — general web search with fallback backends (`pi-ws`).
-- `extensions/subagents/` — synchronous and visible-pane subagent delegation.
+- `extensions/subagents/` — asynchronous visible-pane subagent delegation.
 - `extensions/index.ts` — shared LSP extension.
 
 Directory-based extensions own their runtime files, package manifest, and

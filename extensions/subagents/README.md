@@ -78,7 +78,9 @@ Subagent panes are created without stealing keyboard focus (cmux, tmux). Launch 
 | -------------------------- | ------------------------------------ |
 | `/plan`                    | Start a full planning workflow       |
 | `/iterate`                 | Fork into a subagent for quick fixes |
-| `/subagent <agent> <task>` | Spawn a named agent directly         |
+| `/subagent [<agent> [task]]` | Choose or spawn a named agent directly |
+
+`/subagent` with no arguments opens a visual agent picker and then prompts for the task. While typing `/subagent <agent>`, the editor shows matching agent names and descriptions; press `Tab` to force the candidate list, use `↑`/`↓` to move, and confirm with `Tab` or `Enter`. Agents with `disable-model-invocation: true` are omitted from both discovery surfaces.
 
 ### Bundled Agents
 

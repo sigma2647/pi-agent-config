@@ -86,16 +86,20 @@ function createMockExtensionApi() {
   const registeredTools: Array<any> = [];
   const registeredCommands: Array<any> = [];
   const registeredMessageRenderers: Array<any> = [];
+  const registeredEvents: Array<{ event: string; handler: any }> = [];
   const sentUserMessages: string[] = [];
   const sentMessages: Array<any> = [];
   return {
     registeredTools,
     registeredCommands,
     registeredMessageRenderers,
+    registeredEvents,
     sentUserMessages,
     sentMessages,
     api: {
-      on() {},
+      on(event: string, handler: any) {
+        registeredEvents.push({ event, handler });
+      },
       registerTool(tool: any) {
         registeredTools.push(tool);
       },
@@ -1152,6 +1156,146 @@ describe("subagent discovery", () => {
 
       assert.ok(agents.some((agent: any) => agent.name === "visible-discovery-test-agent"));
       assert.match(result.content[0].text, /visible-discovery-test-agent/);
+    });
+  });
+
+  it("shows available agents in diagnostics and handles the interactive picker", async () => {
+    await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
+      writeAgentFile(
+        projectAgentsDir,
+        "command-visible-test-agent",
+        [
+          "name: command-visible-test-agent",
+          "description: Visible command test agent",
+          "model: anthropic/test-command-visible",
+        ].join("\n"),
+      );
+      writeAgentFile(
+        projectAgentsDir,
+        "command-hidden-test-agent",
+        [
+          "name: command-hidden-test-agent",
+          "model: anthropic/test-command-hidden",
+          "disable-model-invocation: true",
+        ].join("\n"),
+      );
+
+      const { api, registeredCommands, registeredEvents, sentUserMessages } =
+        createMockExtensionApi();
+      (subagentsModule as any).default(api);
+
+      const command = registeredCommands.find((entry) => entry.name === "subagent");
+      assert.ok(command, "expected /subagent to be registered");
+
+      const allCompletions = command.getArgumentCompletions("");
+      assert.ok(
+        allCompletions.some((item: any) => item.value === "command-visible-test-agent"),
+      );
+      assert.equal(
+        allCompletions.some((item: any) => item.value === "command-hidden-test-agent"),
+        false,
+      );
+      assert.deepEqual(command.getArgumentCompletions("command-v"), [
+        {
+          value: "command-visible-test-agent",
+          label: "command-visible-test-agent",
+          description: "Visible command test agent",
+        },
+      ]);
+      assert.equal(command.getArgumentCompletions("command-visible-test-agent task"), null);
+
+      const sessionStart = registeredEvents.find((entry) => entry.event === "session_start");
+      assert.ok(sessionStart, "expected a session_start handler");
+      let wrapAutocomplete: any;
+      sessionStart.handler({}, {
+        ui: {
+          addAutocompleteProvider(wrapper: any) {
+            wrapAutocomplete = wrapper;
+          },
+        },
+      });
+      const currentProvider = {
+        getSuggestions: () => null,
+        applyCompletion: () => ({ lines: [], cursorLine: 0, cursorCol: 0 }),
+        shouldTriggerFileCompletion: () => false,
+      };
+      const provider = wrapAutocomplete(currentProvider);
+      const forcedSuggestions = await provider.getSuggestions(
+        ["/subagent command-v"],
+        0,
+        "/subagent command-v".length,
+        { signal: new AbortController().signal, force: true },
+      );
+      assert.deepEqual(forcedSuggestions.items, [
+        {
+          value: "command-visible-test-agent",
+          label: "command-visible-test-agent",
+          description: "Visible command test agent",
+        },
+      ]);
+      assert.equal(
+        provider.shouldTriggerFileCompletion(
+          ["/subagent "],
+          0,
+          "/subagent ".length,
+        ),
+        true,
+      );
+
+      const notifications: Array<{ message: string; level: string }> = [];
+      const ctx = {
+        hasUI: false,
+        ui: {
+          notify(message: string, level: string) {
+            notifications.push({ message, level });
+          },
+        },
+      };
+
+      await command.handler("", ctx);
+      await command.handler("missing-test-agent", ctx);
+
+      assert.equal(notifications[0].level, "warning");
+      assert.match(notifications[0].message, /Usage: \/subagent <agent> \[task\]/);
+      assert.match(notifications[0].message, /Available agents: .*command-visible-test-agent/);
+      assert.equal(notifications[1].level, "error");
+      assert.match(notifications[1].message, /Agent "missing-test-agent" not found\./);
+      assert.match(notifications[1].message, /Available agents: .*command-visible-test-agent/);
+      assert.doesNotMatch(notifications[0].message, /command-hidden-test-agent/);
+      assert.doesNotMatch(notifications[1].message, /command-hidden-test-agent/);
+
+      await command.handler("", {
+        hasUI: true,
+        ui: {
+          select: async (_title: string, choices: string[]) =>
+            choices.find((choice) => choice.startsWith("command-visible-test-agent")),
+          input: async () => "Review authentication",
+        },
+      });
+      assert.equal(sentUserMessages.length, 1);
+      assert.match(sentUserMessages[0], /agent: "command-visible-test-agent"/);
+      assert.match(sentUserMessages[0], /Review authentication/);
+
+      await command.handler("", {
+        hasUI: true,
+        ui: {
+          select: async () => undefined,
+          input: async () => {
+            throw new Error("input must not open after selection is cancelled");
+          },
+        },
+      });
+      assert.equal(sentUserMessages.length, 1);
+
+      await command.handler("", {
+        hasUI: true,
+        ui: {
+          select: async (_title: string, choices: string[]) =>
+            choices.find((choice) => choice.startsWith("command-visible-test-agent")),
+          input: async () => undefined,
+        },
+      });
+      assert.equal(sentUserMessages.length, 1);
     });
   });
 
