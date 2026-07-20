@@ -2,7 +2,7 @@
 
 - 状态：已接受（复评后维持）
 - 日期：2026-07-17
-- 最近复评：2026-07-17
+- 复评日期：2026-07-17
 - 决策所有者：`pi-agent-config`
 - 决策范围：本仓库的 `extensions/subagents`
 - 上游参考：`HazAT/pi-interactive-subagents`
