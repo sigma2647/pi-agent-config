@@ -27,7 +27,6 @@ BACKUP_DIR="$PI_DIR/.backup/$(date +%Y%m%d-%H%M%S)"
 LINK_FILES=(
   "models.json"
   "presets.json"
-  "AGENTS.md"
   "SYSTEM.md"
   "keybindings.json"
   "mcp.json"
@@ -236,6 +235,9 @@ main() {
   for f in "${LINK_FILES[@]}"; do
     link_one "$REPO_DIR/$f" "$PI_DIR/$f"
   done
+  link_one "$REPO_DIR/global/AGENTS.md" "$PI_DIR/AGENTS.md"
+  link_one "$REPO_DIR/global/APPEND_SYSTEM.md" "$PI_DIR/APPEND_SYSTEM.md"
+  link_one "$REPO_DIR/agent/agents" "$PI_DIR/agents"
 
   # 6. 把仓库注册为 pi package。extensions/skills/prompts/themes
   #    由 pi 从这个 package 路径加载, 无需 symlink。
