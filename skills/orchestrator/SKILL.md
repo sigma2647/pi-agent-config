@@ -10,7 +10,7 @@ autonomous specialists used by this skill are dispatched via the
 `subagent` tool:
 
 - **scout** — codebase reconnaissance. Tools: `read`, `bash`. Returns a structured map.
-- **researcher** — web research. Tools: `web_search`, `web_fetch`. Returns a sourced brief.
+- **researcher** — deep web research across general search, OpenCLI site adapters, Zhihu, and rendered pages. Tools: `web_search`, `web_fetch`, `bash`. Returns a sourced brief.
 - **worker** — isolated code changes. Tools: `read`, `bash`, `write`, `edit`. It cannot spawn subagents.
 
 ## Understand Before You Build
