@@ -3,6 +3,8 @@
 #
 # 用法:
 #   ./setup.sh             # 安装/更新
+#   ./setup.sh agents      # 只同步 agents
+#   ./setup.sh prompts     # 只同步 prompts package
 #   ./setup.sh --dry-run   # 只打印将要做的操作
 #   ./setup.sh --force     # 覆盖已存在的非 symlink 文件 (会先备份)
 #   ./setup.sh --unlink    # 移除本脚本创建的 symlink, 并卸载 pi package
@@ -45,13 +47,18 @@ PROTECTED=(
 DRY_RUN=0
 FORCE=0
 UNLINK=0
+SYNC=""
 
 for arg in "$@"; do
   case "$arg" in
+    agents|prompts)
+      [ -z "$SYNC" ] || { echo "只能指定一个同步目标" >&2; exit 1; }
+      SYNC="$arg"
+      ;;
     --dry-run) DRY_RUN=1 ;;
     --force)   FORCE=1 ;;
     --unlink)  UNLINK=1 ;;
-    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "未知参数: $arg" >&2; exit 1 ;;
   esac
 done
@@ -117,6 +124,21 @@ link_one() {
   run "ln -s \"$src\" \"$dst\""
 }
 
+# 目标是真实目录时合并其中的文件；否则直接链接整个目录。
+link_dir() {
+  local src="$1" dst="$2"
+
+  if [ ! -d "$src" ] || [ ! -d "$dst" ] || [ -L "$dst" ]; then
+    link_one "$src" "$dst"
+    return
+  fi
+
+  for item in "$src"/* "$src"/.[!.]*; do
+    [ -e "$item" ] || continue
+    link_one "$item" "$dst/$(basename "$item")"
+  done
+}
+
 merge_settings() {
   local src="$REPO_DIR/settings.json"
   local dst="$PI_DIR/settings.json"
@@ -146,10 +168,31 @@ NODE
   info "merge settings.json"
 }
 
+install_package() {
+  if ! command -v pi >/dev/null 2>&1; then
+    err "pi 未安装。先运行 ./setup.sh。"
+    return 1
+  fi
+  [ -f "$REPO_DIR/package.json" ] || return 0
+
+  info "pi install $REPO_DIR"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "${C_DIM}[dry-run] pi install \"$REPO_DIR\"${C_RST}"
+  else
+    pi install "$REPO_DIR" || warn "pi install 失败, 可手动执行"
+  fi
+}
+
 unlink_all() {
   info "移除指向 $REPO_DIR 的 symlink"
   shopt -s nullglob
-  for f in "$PI_DIR"/* "$PI_DIR"/.[!.]*; do
+  local links=("$PI_DIR"/* "$PI_DIR"/.[!.]*)
+  if [ -d "$PI_DIR/agents" ] && [ ! -L "$PI_DIR/agents" ]; then
+    links+=("$PI_DIR/agents"/* "$PI_DIR/agents"/.[!.]*)
+  fi
+
+  local f
+  for f in "${links[@]}"; do
     [ -L "$f" ] || continue
     local target; target="$(readlink "$f")"
     case "$target" in
@@ -180,10 +223,23 @@ main() {
   run "mkdir -p \"$PI_DIR\""
 
   if [ "$UNLINK" = 1 ]; then
+    [ -z "$SYNC" ] || { err "--unlink 不能指定同步目标"; exit 1; }
     unlink_all
     info "完成。"
     exit 0
   fi
+
+  case "$SYNC" in
+    agents)
+      link_dir "$REPO_DIR/agent/agents" "$PI_DIR/agents"
+      exit 0
+      ;;
+    prompts)
+      [ -d "$REPO_DIR/prompts" ] || { err "$REPO_DIR/prompts 不存在"; exit 1; }
+      install_package
+      exit 0
+      ;;
+  esac
 
   # 1. Node 必须先有
   if ! command -v node >/dev/null 2>&1; then
@@ -237,18 +293,11 @@ main() {
   done
   link_one "$REPO_DIR/global/AGENTS.md" "$PI_DIR/AGENTS.md"
   link_one "$REPO_DIR/global/APPEND_SYSTEM.md" "$PI_DIR/APPEND_SYSTEM.md"
-  link_one "$REPO_DIR/agent/agents" "$PI_DIR/agents"
+  link_dir "$REPO_DIR/agent/agents" "$PI_DIR/agents"
 
   # 6. 把仓库注册为 pi package。extensions/skills/prompts/themes
   #    由 pi 从这个 package 路径加载, 无需 symlink。
-  if command -v pi >/dev/null 2>&1 && [ -f "$REPO_DIR/package.json" ]; then
-    info "pi install $REPO_DIR"
-    if [ "$DRY_RUN" = 1 ]; then
-      echo "${C_DIM}[dry-run] pi install \"$REPO_DIR\"${C_RST}"
-    else
-      pi install "$REPO_DIR" || warn "pi install 失败, 可手动执行"
-    fi
-  fi
+  install_package
 
   echo
   info "完成。Extensions 从 $REPO_DIR/extensions 加载 (pi list 验证)"
