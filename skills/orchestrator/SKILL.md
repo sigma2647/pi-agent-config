@@ -37,6 +37,18 @@ scout), exactly which APIs/patterns to use (scout or researcher).
 Your context window is finite and non-renewable. Every file you read directly
 stays in your context for the rest of the session.
 
+### Project Context
+
+Standalone mode isolates parent conversation history, not project governance.
+A child automatically loads the applicable `AGENTS.md`, `CLAUDE.md`, project
+settings, and project skills from its `cwd`. If `cwd` is omitted, it runs in
+the parent's current working directory and receives that project's rules.
+
+Set `cwd` explicitly when dispatching work for another repository. Do not copy
+the caller repository's `AGENTS.md` into a different target repository; the
+target repository's rules are authoritative. Project-local `.pi/agents/`
+definitions may override bundled agents with the same name.
+
 **Default to scouts for exploration.** If a task means understanding how
 something works across multiple files, finding where something is defined/used,
 investigating a bug, or checking whether a change is safe — **send a scout.**
