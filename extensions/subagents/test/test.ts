@@ -1147,6 +1147,29 @@ describe("subagent discovery", () => {
     assert.doesNotThrow(() => testApi.validateModelOverride(undefined, undefined));
   });
 
+  it("resolvePiExecutable honors explicit override", () => {
+    assert.equal(
+      testApi.resolvePiExecutable({
+        env: { PI_SUBAGENT_PI_BIN: "/custom/pi" },
+        argv: ["node", "/ignored/pi"],
+        voltaWhich: () => "/ignored/volta/pi",
+      }),
+      "/custom/pi",
+    );
+  });
+
+  it("resolvePiExecutable avoids context-sensitive Volta shims", () => {
+    assert.equal(testApi.isVoltaShimPath("/Users/alice/.volta/bin/pi"), true);
+    assert.equal(
+      testApi.resolvePiExecutable({
+        env: {},
+        argv: ["node", "/Users/alice/.volta/bin/pi"],
+        voltaWhich: () => "/Users/alice/.volta/tools/image/packages/pkg/bin/pi",
+      }),
+      "/Users/alice/.volta/tools/image/packages/pkg/bin/pi",
+    );
+  });
+
   it("buildPiPromptArgs inserts separator for artifact-backed launches with skills", () => {
     assert.deepEqual(
       testApi.buildPiPromptArgs({ effectiveSkills: "review,lint", taskDelivery: "artifact", taskArg: "@artifact.md" }),

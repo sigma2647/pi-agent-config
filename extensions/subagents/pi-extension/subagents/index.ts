@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { keyHint } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@sinclair/typebox";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readdirSync,
@@ -14,6 +14,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -1015,6 +1016,45 @@ function validateModelOverride(model: string | undefined, cli: string | undefine
   }
 }
 
+function isVoltaShimPath(filePath: string): boolean {
+  return filePath.split(/[\\/]+/).join("/").includes("/.volta/bin/");
+}
+
+function resolveVoltaPiExecutable(): string | null {
+  try {
+    const resolved = execFileSync("volta", ["which", "pi"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return resolved ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePiExecutable(options: {
+  env?: NodeJS.ProcessEnv;
+  argv?: string[];
+  voltaWhich?: () => string | null;
+} = {}): string {
+  const env = options.env ?? process.env;
+  const override = env.PI_SUBAGENT_PI_BIN?.trim();
+  if (override) return override;
+
+  const argv = options.argv ?? process.argv;
+  const argvExecutable = argv[1] && isAbsolute(argv[1]) && existsSync(argv[1]) ? argv[1] : null;
+
+  // Volta shims are context-sensitive: after `cd` into a child project, running
+  // the shim may fail with "Could not locate executable `pi` in your project".
+  // Prefer the real package executable behind the shim for subagent launches.
+  if (argvExecutable && !isVoltaShimPath(argvExecutable)) return argvExecutable;
+
+  const voltaExecutable = (options.voltaWhich ?? resolveVoltaPiExecutable)();
+  if (voltaExecutable) return voltaExecutable;
+
+  return argvExecutable ?? "pi";
+}
+
 export const __test__ = {
   borderLine,
   getShellReadyDelayMs,
@@ -1035,6 +1075,8 @@ export const __test__ = {
   resolveResultPresentation,
   resolveResumeLaunchBehavior,
   validateModelOverride,
+  isVoltaShimPath,
+  resolvePiExecutable,
   runningSubagents,
   formatElapsed,
   findGitRootSync,
@@ -1214,7 +1256,7 @@ async function launchSubagent(
   // ── Pi CLI path ──
 
   // Build pi command
-  const parts: string[] = ["pi"];
+  const parts: string[] = [shellEscape(resolvePiExecutable())];
   parts.push("--session", shellEscape(subagentSessionFile));
 
   const subagentDonePath = join(SUBAGENTS_DIR, "subagent-done.ts");
@@ -1951,7 +1993,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 
         // Build pi resume command
-        const parts = ["pi", "--session", shellEscape(params.sessionPath)];
+        const parts = [shellEscape(resolvePiExecutable()), "--session", shellEscape(params.sessionPath)];
 
         // Load subagent-done extension so the agent can self-terminate if needed
         const subagentDonePath = join(SUBAGENTS_DIR, "subagent-done.ts");
