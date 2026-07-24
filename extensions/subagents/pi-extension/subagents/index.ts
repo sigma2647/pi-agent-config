@@ -58,9 +58,9 @@ import {
 /** Absolute path to `pi-extension/subagents`. https://github.com/nodejs/node/issues/37845 */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
-// Survive /reload: clear timers and abort poll loops from the previous module load.
-// /reload re-imports this file, giving fresh module-level state, but closures from
-// the old module keep running. See https://github.com/HazAT/pi-interactive-subagents/issues/5
+// Survive /reload: clear duplicate UI timers from the previous module load,
+// but keep background poll loops alive so already-started subagents can report
+// their results after the reload. See https://github.com/HazAT/pi-interactive-subagents/issues/5
 const WIDGET_INTERVAL_KEY = Symbol.for("pi-subagents/widget-interval");
 const STATUS_INTERVAL_KEY = Symbol.for("pi-subagents/status-interval");
 const POLL_ABORT_KEY = Symbol.for("pi-subagents/poll-abort-controller");
@@ -77,8 +77,9 @@ const POLL_ABORT_KEY = Symbol.for("pi-subagents/poll-abort-controller");
     (globalThis as any)[STATUS_INTERVAL_KEY] = null;
   }
   const prevAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
-  if (prevAbort) prevAbort.abort();
-  (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
+  if (!prevAbort || prevAbort.signal.aborted) {
+    (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
+  }
 }
 
 function getModuleAbortSignal(): AbortSignal {
@@ -1085,6 +1086,7 @@ export const __test__ = {
   resolveEffectiveContextFiles,
   CONTEXT_CANDIDATES,
   formatAgentPromptPolicy,
+  getModuleAbortSignal,
 };
 
 function startWidgetRefresh() {
@@ -1584,7 +1586,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   });
 
   // Clean up on session shutdown
-  pi.on("session_shutdown", (_event, _ctx) => {
+  pi.on("session_shutdown", (event, _ctx) => {
     if (widgetInterval) {
       clearInterval(widgetInterval);
       widgetInterval = null;
@@ -1595,6 +1597,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       statusInterval = null;
       (globalThis as any)[STATUS_INTERVAL_KEY] = null;
     }
+
+    // A reload rebinds extensions while the Pi process keeps running. Do not
+    // turn that into a false subagent failure; the old watcher still owns the
+    // child pane and will steer the real result back when it finishes.
+    if ((event as any)?.reason === "reload") return;
+
     const moduleAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
     if (moduleAbort) moduleAbort.abort();
     for (const [_id, agent] of runningSubagents) {
