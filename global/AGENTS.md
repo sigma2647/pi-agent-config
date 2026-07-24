@@ -18,7 +18,7 @@
 - **发现/搜索** → web_search（通用）
 - **站内结构化内容** → opencli（B站/豆瓣/微博/小红书/YouTube/Reddit/HN/arXiv/维基）
 - **知乎内容** → zhihu search
-- **交互式/需登录** → agent_browser
+- **交互式/需登录** → browser-probe
 - **GitHub 元数据** → gh api（commits/releases/活跃度）；内容/Pull Request/Issue 用 web_fetch
 - 站内搜索不属于通用 web_search，走 opencli 适配器
 - 不并行执行互斥的搜索路径；第一个非空结果就停下来
