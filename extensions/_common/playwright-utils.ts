@@ -125,19 +125,3 @@ export function getPlaywrightExecutablePath(): string | undefined {
 		return undefined;
 	}
 }
-
-/**
- * Common Bing URL decoder to recover real destination from click-tracking links.
- * Bing wraps hrefs in /ck/a?u=a1<urlsafe-b64>.
- */
-export function decodeBingUrl(href: string): string {
-	try {
-		const u = new URL(href);
-		const enc = u.searchParams.get("u");
-		if (enc && enc.startsWith("a1")) {
-			const raw = enc.slice(2).replace(/-/g, "+").replace(/_/g, "/");
-			return atob(raw + "===".slice((raw.length + 3) % 4));
-		}
-	} catch { /* return original */ }
-	return href;
-}
