@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { keyHint } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@sinclair/typebox";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readdirSync,
@@ -111,7 +111,7 @@ const SubagentParams = Type.Object({
   cwd: Type.Optional(
     Type.String({
       description:
-        "Working directory for the sub-agent. The agent starts in this folder and picks up its local .pi/ config, CLAUDE.md, skills, and extensions. Use for role-specific subfolders.",
+        "Working directory for the sub-agent. Local config, skills, and extensions are discovered there; the agent's context-files policy controls AGENTS.md/CLAUDE.md loading.",
     }),
   ),
   fork: Type.Optional(
@@ -146,6 +146,7 @@ interface AgentDefaults {
   autoExit?: boolean;
   interactive?: boolean;
   systemPromptMode?: "append" | "replace";
+  contextFiles?: "all" | "project" | "none";
   sessionMode?: SubagentSessionMode;
   cwd?: string;
   cli?: string;
@@ -232,6 +233,7 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
   const frontmatter = match[1];
   const body = content.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
   const systemPromptMode = getFrontmatterValue(frontmatter, "system-prompt");
+  const contextFilesValue = getFrontmatterValue(frontmatter, "context-files");
 
   return {
     name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
@@ -244,6 +246,10 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
         : systemPromptMode === "append"
           ? "append"
           : undefined,
+    contextFiles:
+      contextFilesValue === "all" || contextFilesValue === "project" || contextFilesValue === "none"
+        ? contextFilesValue
+        : undefined,
     skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
     thinking: getFrontmatterValue(frontmatter, "thinking"),
     denyTools: getFrontmatterValue(frontmatter, "deny-tools"),
@@ -301,6 +307,13 @@ function formatAvailableAgents(): string {
   return `Available agents: ${names.length > 0 ? names.join(", ") : "none"}`;
 }
 
+function formatAgentPromptPolicy(agent: AgentDefaults): string {
+  const promptMode = agent.systemPromptMode ?? "task";
+  const contextFiles = resolveEffectiveContextFiles(agent);
+  const sessionMode = agent.sessionMode ?? "standalone";
+  return `prompt=${promptMode}, context=${contextFiles}, session=${sessionMode}`;
+}
+
 function resolveSubagentPaths(
   params: Static<typeof SubagentParams>,
   agentDefs: AgentDefaults | null,
@@ -326,6 +339,80 @@ function getDefaultSessionDirFor(cwd: string, agentDir: string): string {
     mkdirSync(sessionDir, { recursive: true });
   }
   return sessionDir;
+}
+
+// ── Context file helpers ──
+
+const CONTEXT_CANDIDATES = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+
+/** Find the nearest git repository root from startDir, or null. */
+function findGitRootSync(startDir: string): string | null {
+  let currentDir = resolve(startDir);
+  while (true) {
+    if (existsSync(join(currentDir, ".git"))) return currentDir;
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) return null;
+    currentDir = parentDir;
+  }
+}
+
+/**
+ * Collect project context files from git root (or cwd) down to targetCwd.
+ * Returns one candidate per directory, matched in precedence order:
+ * AGENTS.md, AGENTS.MD, CLAUDE.md, CLAUDE.MD.
+ * Does NOT include files above git root or global config.
+ */
+function collectProjectContextFiles(targetCwd: string): Array<{ dir: string; file: string }> {
+  const resolvedCwd = resolve(targetCwd);
+  const gitRoot = findGitRootSync(resolvedCwd);
+  const startDir = gitRoot ?? resolvedCwd;
+  const relPath = relative(startDir, resolvedCwd);
+  const directories = [startDir];
+  let currentDir = startDir;
+
+  for (const segment of relPath ? relPath.split(sep) : []) {
+    currentDir = join(currentDir, segment);
+    directories.push(currentDir);
+  }
+
+  const results: Array<{ dir: string; file: string }> = [];
+  for (const dir of directories) {
+    for (const candidate of CONTEXT_CANDIDATES) {
+      const file = join(dir, candidate);
+      if (existsSync(file)) {
+        results.push({ dir, file });
+        break;
+      }
+    }
+  }
+  return results;
+}
+
+/** Build the same project-context wrapper Pi uses for readable context files. */
+function buildProjectContextBlock(contextFiles: Array<{ dir: string; file: string }>): string {
+  const instructions: string[] = [];
+  for (const { file } of contextFiles) {
+    try {
+      instructions.push(
+        `<project_instructions path="${file}">\n${readFileSync(file, "utf8")}\n</project_instructions>`,
+      );
+    } catch {
+      // Match Pi's tolerant context discovery: an unreadable file must not block startup.
+    }
+  }
+  if (instructions.length === 0) return "";
+
+  return (
+    "<project_context>\n\nProject-specific instructions and guidelines:\n\n" +
+    instructions.join("\n\n") +
+    "\n\n</project_context>"
+  );
+}
+
+function resolveEffectiveContextFiles(
+  agentDefs: AgentDefaults | null,
+): "all" | "project" | "none" {
+  return agentDefs?.contextFiles ?? "all";
 }
 
 function resolveEffectiveSessionMode(
@@ -684,17 +771,18 @@ function updateWidget() {
  * first positional message so that /skill: args land in messages[1..] and arrive
  * as standalone prompts in the child session.
  */
-const SUBAGENT_CONTROL_TOOLS = ["caller_ping", "subagent_done"] as const;
-
 /**
  * Build the child --tools allowlist.
  *
  * Pi 0.70+ applies --tools to built-in, extension, and custom tools. If a
  * subagent definition restricts tools to e.g. "read,bash,write", the child
- * control tools from subagent-done.ts would otherwise be hidden, leaving a
- * manually resumed or user-touched subagent unable to call subagent_done.
+ * control tools from subagent-done.ts would otherwise be hidden. Auto-exit
+ * agents need caller_ping only; interactive agents also need subagent_done.
  */
-function buildSubagentToolAllowlist(effectiveTools?: string): string | null {
+function buildSubagentToolAllowlist(
+  effectiveTools?: string,
+  autoExit = false,
+): string | null {
   const requested = (effectiveTools ?? "")
     .split(",")
     .map((tool) => tool.trim())
@@ -703,9 +791,8 @@ function buildSubagentToolAllowlist(effectiveTools?: string): string | null {
   if (requested.length === 0) return null;
 
   const allow = new Set(requested);
-  for (const tool of SUBAGENT_CONTROL_TOOLS) {
-    allow.add(tool);
-  }
+  allow.add("caller_ping");
+  if (!autoExit) allow.add("subagent_done");
 
   return [...allow].join(",");
 }
@@ -950,6 +1037,12 @@ export const __test__ = {
   validateModelOverride,
   runningSubagents,
   formatElapsed,
+  findGitRootSync,
+  collectProjectContextFiles,
+  buildProjectContextBlock,
+  resolveEffectiveContextFiles,
+  CONTEXT_CANDIDATES,
+  formatAgentPromptPolicy,
 };
 
 function startWidgetRefresh() {
@@ -1040,6 +1133,7 @@ async function launchSubagent(
   const identity = agentDefs?.body ?? params.systemPrompt ?? null;
   const systemPromptMode = agentDefs?.systemPromptMode;
   const identityInSystemPrompt = systemPromptMode && identity;
+  const effectiveContextFiles = resolveEffectiveContextFiles(agentDefs);
   const roleBlock = identity && !identityInSystemPrompt ? `\n\n${identity}` : "";
   const fullTask = inheritsConversationContext
     ? params.task
@@ -1134,6 +1228,19 @@ async function launchSubagent(
   // Pass agent body as system prompt via file to avoid shell escaping issues
   // with multiline content. Pi's --append-system-prompt and --system-prompt
   // auto-detect file paths and read their contents.
+
+  // --no-context-files: suppress automatic AGENTS.md/CLAUDE.md loading
+  // when the frontmatter restricts context files to project-only or none.
+  // Project-only mode manually includes files from git root to cwd.
+  const contextCwd = targetCwdForSession;
+  const projectContextBlock =
+    effectiveContextFiles === "project"
+      ? buildProjectContextBlock(collectProjectContextFiles(contextCwd))
+      : "";
+  if (effectiveContextFiles !== "all") {
+    parts.push("--no-context-files");
+  }
+
   if (identityInSystemPrompt && identity) {
     const flag = systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
     const spTimestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -1145,11 +1252,24 @@ async function launchSubagent(
       .replace(/^-|-$/g, "");
     const syspromptPath = join(artifactDir, `context/${spSafeName || "subagent"}-sysprompt-${spTimestamp}.md`);
     mkdirSync(dirname(syspromptPath), { recursive: true });
-    writeFileSync(syspromptPath, identity, "utf8");
+    const spContent = projectContextBlock
+      ? identity + "\n\n" + projectContextBlock
+      : identity;
+    writeFileSync(syspromptPath, spContent, "utf8");
     parts.push(flag, shellEscape(syspromptPath));
+  } else if (projectContextBlock) {
+    // No identity system prompt, but project context is needed: use --append-system-prompt
+    const spTimestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const syspromptPath = join(artifactDir, `context/context-files-${spTimestamp}.md`);
+    mkdirSync(dirname(syspromptPath), { recursive: true });
+    writeFileSync(syspromptPath, projectContextBlock, "utf8");
+    parts.push("--append-system-prompt", shellEscape(syspromptPath));
   }
 
-  const toolAllowlist = buildSubagentToolAllowlist(effectiveTools);
+  const toolAllowlist = buildSubagentToolAllowlist(
+    effectiveTools,
+    agentDefs?.autoExit === true,
+  );
   if (toolAllowlist) {
     parts.push("--tools", shellEscape(toolAllowlist));
   }
@@ -1457,19 +1577,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagent",
       label: "Subagent",
       description:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate, assume, or summarize results after calling this tool. " +
-        "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
-      promptSnippet:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate, assume, or summarize results after calling this tool. " +
-        "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
+        "Spawn an asynchronous sub-agent in a dedicated pane and return immediately. " +
+        "Its result is delivered automatically as a steer message; never poll for completion or infer results before delivery.",
+      promptSnippet: "Spawn an async sub-agent; results arrive automatically—never poll or infer them.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1664,10 +1774,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         "Send Escape to the active turn of a currently running Pi-backed subagent. " +
         "The child pane, session, watcher, and running entry remain alive; this returns only a local acknowledgement " +
         "and does not emit a subagent_result solely because of this request.",
-      promptSnippet:
-        "Send Escape to the active turn of a currently running Pi-backed subagent. " +
-        "The child pane, session, watcher, and running entry remain alive; this returns only a local acknowledgement " +
-        "and does not emit a subagent_result solely because of this request.",
+      promptSnippet: "Interrupt a Pi-backed subagent's active turn without closing its session.",
       parameters: Type.Object({
         id: Type.Optional(Type.String({ description: "Exact running subagent id" })),
         name: Type.Optional(Type.String({ description: "Exact running subagent display name" })),
@@ -1716,10 +1823,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         "List all available subagent definitions. " +
         "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
         "Project-local agents override global ones with the same name.",
-      promptSnippet:
-        "List all available subagent definitions. " +
-        "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
-        "Project-local agents override global ones with the same name.",
+      promptSnippet: "List available package, global, and project subagent definitions.",
       parameters: Type.Object({}),
 
       async execute() {
@@ -1736,7 +1840,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const badge = a.source === "project" ? " (project)" : "";
           const desc = a.description ? ` — ${a.description}` : "";
           const model = a.model ? ` [${a.model}]` : "";
-          return `• ${a.name}${badge}${model}${desc}`;
+          const policy = ` {${formatAgentPromptPolicy(a)}}`;
+          return `• ${a.name}${badge}${model}${policy}${desc}`;
         });
 
         return {
@@ -1755,7 +1860,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const badge = a.source === "project" ? theme.fg("accent", " (project)") : "";
           const desc = a.description ? theme.fg("dim", ` — ${a.description}`) : "";
           const model = a.model ? theme.fg("dim", ` [${a.model}]`) : "";
-          return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${desc}`;
+          const policy = theme.fg("dim", ` {${formatAgentPromptPolicy(a)}}`);
+          return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${policy}${desc}`;
         });
         return new Text(lines.join("\n"), 0, 0);
       },
@@ -1769,19 +1875,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagent_resume",
       label: "Resume Subagent",
       description:
-        "Resume a previous sub-agent session in a new multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the resumed sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT poll for status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate or assume results. After resuming, either end your turn or work on other independent tasks; the harness will wake you when the result is ready. " +
-        "Use when a sub-agent was cancelled or needs follow-up work.",
-      promptSnippet:
-        "Resume a previous sub-agent session in a new multiplexer pane. " +
-        "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
-        "When the resumed sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
-        "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT poll for status. All of that is wasted work — the harness handles delivery for you. " +
-        "DO NOT fabricate or assume results. After resuming, either end your turn or work on other independent tasks; the harness will wake you when the result is ready. " +
-        "Use when a sub-agent was cancelled or needs follow-up work.",
+        "Resume a sub-agent session asynchronously in a new pane and return immediately. " +
+        "Its result is delivered automatically as a steer message; never poll for completion or infer results before delivery.",
+      promptSnippet: "Resume an async subagent session; results arrive automatically—never poll or infer them.",
       parameters: Type.Object({
         sessionPath: Type.String({ description: "Path to the session .jsonl file to resume" }),
         name: Type.Optional(

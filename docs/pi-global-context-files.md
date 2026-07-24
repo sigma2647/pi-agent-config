@@ -8,13 +8,13 @@ Pi 将项目上下文和系统提示词分成三类文件：
 
 | 文件 | 作用 | 推荐内容 |
 |---|---|---|
-| `~/.pi/agent/AGENTS.md` | 所有项目共享的上下文 | 工作环境、常用技术栈、通用开发约定 |
-| `~/.pi/agent/APPEND_SYSTEM.md` | 追加到 Pi 默认 system prompt | 行为、语气、安全边界、验证原则、工具偏好 |
+| `~/.pi/agent/AGENTS.md` | 所有项目共享的上下文 | 工作环境、技术栈、路由规则 |
+| `~/.pi/agent/APPEND_SYSTEM.md` | 追加到 Pi 默认 system prompt | (可选) 行为偏好、安全边界。空文件=不追加、省 token |
 | `~/.pi/agent/SYSTEM.md` | 完全替换 Pi 默认 system prompt | 单用途 Agent 的完整角色和工作流 |
 
 项目级 `AGENTS.md` 用于项目结构、命令、架构、测试和部署规则；项目还可以用 `.pi/APPEND_SYSTEM.md` 添加只在该项目生效的行为约束。
 
-普通编码环境优先使用 `AGENTS.md` 和 `APPEND_SYSTEM.md`。只有需要把 Pi 变成新闻抓取器、文本校正器等单用途 Agent 时，才使用 `SYSTEM.md`。
+总 prompt 大小直接影响 token 消耗和响应速度；规则放在 AGENTS.md 还是 APPEND_SYSTEM.md 不改变 token 成本。本仓库将精简后的全局规则集中在 AGENTS.md，APPEND_SYSTEM.md 故意留空，避免同一规则重复注入。
 
 ## Pi 的加载规则
 
@@ -38,6 +38,31 @@ System prompt 文件分为：
 
 - [Pi README：Context Files](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md#context-files)
 - [Pi 使用文档：Context Files](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md#context-files)
+
+## Subagent 的上下文边界
+
+本仓库的 Pi-backed subagent 不是直接复用父 Agent 的 system prompt：
+
+- `standalone`、`lineage-only` 不复制父会话内容；
+- `fork` 复制父会话消息，但不复制父 system prompt；
+- 三种模式都会按子进程的 CLI 参数、cwd、配置、扩展、context files 和 skills 重新构建 system prompt。
+
+Agent 定义可用 `context-files` 控制重建时的上下文文件：
+
+| 值 | 行为 |
+|---|---|
+| `all` | Pi 默认行为：加载全局文件和 cwd 的祖先文件 |
+| `project` | 禁用自动加载，只注入最近 Git 根目录到子 cwd 的项目文件 |
+| `none` | 禁用所有 `AGENTS.md` / `CLAUDE.md` |
+
+`system-prompt: replace` 只替换 Pi 的默认身份、工具摘要和通用 guidelines；不会关闭 skill discovery，也不会移除 API 层的 tool schemas。因此，context-files 隔离和 skill 渐进式披露是两个独立问题，不能用前者的通过结果代替后者的验收。
+
+诊断时先调用 `subagents_list`，确认输出中的 `prompt=...`、`context=...`、`session=...`。再从子 Agent pane 执行 `/export`，验证：
+
+1. `context=project` 不含 `~/.pi/agent/AGENTS.md` 或 Git 根目录以上的 context；
+2. 项目 Git 根目录到子 cwd 的 context 仍然存在；
+3. `prompt=replace` 不含 Pi 默认 prompt；
+4. skills 是否仍出现要单独记录，不算 context-files 回归。
 
 ## 公开实例
 
@@ -92,8 +117,8 @@ System prompt 文件分为：
 pi-agent-config/
 ├── AGENTS.md                    # 本仓库自身的开发约定
 └── global/
-    ├── AGENTS.md                # 跨项目环境和开发约定
-    └── APPEND_SYSTEM.md         # 跨项目行为规则
+    ├── AGENTS.md                # 跨项目规则（语言、执行纪律、信息路由）
+    └── APPEND_SYSTEM.md         # (故意为空) 避免与 AGENTS.md 重复注入
 ```
 
 `setup.sh` 使用符号链接安装：

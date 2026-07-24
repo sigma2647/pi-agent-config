@@ -6,7 +6,8 @@ model: deepseek/deepseek-v4-flash
 skill: chrome-cdp
 spawning: false
 auto-exit: true
-system-prompt: append
+system-prompt: replace
+context-files: project
 ---
 
 # Visual Tester

@@ -7,7 +7,8 @@ deny-tools: claude
 model: deepseek/deepseek-v4-flash
 spawning: false
 auto-exit: true
-system-prompt: append
+system-prompt: replace
+context-files: project
 ---
 
 # Researcher Agent

@@ -892,6 +892,29 @@ describe("subagent discovery", () => {
     });
   });
 
+  it("loads context-files from frontmatter and defaults invalid values to all", async () => {
+    await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
+      for (const mode of ["all", "project", "none"]) {
+        writeAgentFile(
+          projectAgentsDir,
+          `context-${mode}-test-agent`,
+          [`name: context-${mode}-test-agent`, `context-files: ${mode}`].join("\n"),
+        );
+        const loaded = testApi.loadAgentDefaults(`context-${mode}-test-agent`);
+        assert.equal(testApi.resolveEffectiveContextFiles(loaded), mode);
+      }
+
+      writeAgentFile(
+        projectAgentsDir,
+        "context-invalid-test-agent",
+        ["name: context-invalid-test-agent", "context-files: sideways"].join("\n"),
+      );
+      const invalid = testApi.loadAgentDefaults("context-invalid-test-agent");
+      assert.equal(invalid?.contextFiles, undefined);
+      assert.equal(testApi.resolveEffectiveContextFiles(invalid), "all");
+    });
+  });
+
   it("loads explicit interactive flag from frontmatter", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       writeAgentFile(
@@ -995,10 +1018,16 @@ describe("subagent discovery", () => {
     );
   });
 
-  it("bundled scout/worker/reviewer agents resolve as non-interactive; planner resolves as interactive", () => {
-    for (const name of ["scout", "worker", "reviewer"]) {
+  it("bundled specialists use lean project context and expected interactivity", () => {
+    for (const name of ["scout", "worker", "researcher", "reviewer", "visual-tester", "planner"]) {
       const defs = testApi.loadAgentDefaults(name);
       assert.ok(defs, `expected bundled agent ${name} to be discoverable`);
+      assert.equal(defs.systemPromptMode, "replace", `${name} should replace Pi's default prompt`);
+      assert.equal(defs.contextFiles, "project", `${name} should load project-only context`);
+    }
+
+    for (const name of ["scout", "worker", "reviewer"]) {
+      const defs = testApi.loadAgentDefaults(name);
       assert.equal(
         testApi.resolveEffectiveInteractive({ name, task: "" }, defs),
         false,
@@ -1007,7 +1036,6 @@ describe("subagent discovery", () => {
     }
 
     const planner = testApi.loadAgentDefaults("planner");
-    assert.ok(planner, "expected bundled planner to be discoverable");
     assert.equal(
       testApi.resolveEffectiveInteractive({ name: "planner", task: "" }, planner),
       true,
@@ -1094,6 +1122,13 @@ describe("subagent discovery", () => {
     );
   });
 
+  it("buildSubagentToolAllowlist omits subagent_done for auto-exit agents", () => {
+    assert.equal(
+      testApi.buildSubagentToolAllowlist("read,bash,web_search", true),
+      "read,bash,web_search,caller_ping",
+    );
+  });
+
   it("buildSubagentToolAllowlist returns null without an explicit tool restriction", () => {
     assert.equal(testApi.buildSubagentToolAllowlist(undefined), null);
     assert.equal(testApi.buildSubagentToolAllowlist(""), null);
@@ -1142,6 +1177,9 @@ describe("subagent discovery", () => {
           "name: visible-discovery-test-agent",
           "description: Visible test agent",
           "model: anthropic/test-visible",
+          "system-prompt: replace",
+          "context-files: project",
+          "session-mode: lineage-only",
         ].join("\n"),
       );
 
@@ -1156,6 +1194,10 @@ describe("subagent discovery", () => {
 
       assert.ok(agents.some((agent: any) => agent.name === "visible-discovery-test-agent"));
       assert.match(result.content[0].text, /visible-discovery-test-agent/);
+      assert.match(
+        result.content[0].text,
+        /\{prompt=replace, context=project, session=lineage-only\}/,
+      );
     });
   });
 
@@ -1378,6 +1420,38 @@ describe("subagent discovery", () => {
   });
 });
 describe("subagent-done.ts", () => {
+  it("hides subagent_done from auto-exit agents", () => {
+    const previousAutoExit = process.env.PI_SUBAGENT_AUTO_EXIT;
+    process.env.PI_SUBAGENT_AUTO_EXIT = "1";
+
+    try {
+      const { api, registeredTools } = createMockExtensionApi();
+      subagentDoneExtension(api);
+      assert.deepEqual(
+        registeredTools.map((tool) => tool.name),
+        ["caller_ping"],
+      );
+    } finally {
+      restoreEnvVar("PI_SUBAGENT_AUTO_EXIT", previousAutoExit);
+    }
+  });
+
+  it("keeps subagent_done available for interactive agents", () => {
+    const previousAutoExit = process.env.PI_SUBAGENT_AUTO_EXIT;
+    delete process.env.PI_SUBAGENT_AUTO_EXIT;
+
+    try {
+      const { api, registeredTools } = createMockExtensionApi();
+      subagentDoneExtension(api);
+      assert.deepEqual(
+        registeredTools.map((tool) => tool.name),
+        ["caller_ping", "subagent_done"],
+      );
+    } finally {
+      restoreEnvVar("PI_SUBAGENT_AUTO_EXIT", previousAutoExit);
+    }
+  });
+
   it("writes a done sidecar before normal auto-exit shutdown", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
@@ -1601,6 +1675,23 @@ describe("tool registration", () => {
     const output = rendered.render(80).join("\n");
 
     assert.match(output, /\(unnamed\)/);
+  });
+
+  it("keeps subagent prompt snippets concise and the async contract explicit", () => {
+    const { api, registeredTools } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+
+    for (const name of ["subagent", "subagent_interrupt", "subagents_list", "subagent_resume"]) {
+      const tool = registeredTools.find((candidate) => candidate.name === name);
+      assert.ok(tool, `expected ${name} to be registered`);
+      assert.ok(tool.promptSnippet.length <= 120, `${name} prompt snippet should stay concise`);
+    }
+
+    for (const name of ["subagent", "subagent_resume"]) {
+      const tool = registeredTools.find((candidate) => candidate.name === name);
+      assert.match(tool.description, /delivered automatically/);
+      assert.match(tool.description, /never poll/);
+    }
   });
 
   it("registers subagent_resume with an autoExit override", () => {

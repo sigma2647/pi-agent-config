@@ -6,7 +6,8 @@ model: deepseek/deepseek-v4-pro
 thinking: medium
 spawning: false
 auto-exit: true
-system-prompt: append
+system-prompt: replace
+context-files: project
 ---
 
 # Reviewer Agent

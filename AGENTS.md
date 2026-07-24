@@ -73,6 +73,11 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **subagents** is a vendored async mux package loaded through its own `package.json`; it returns immediately, shows a live widget, and steers results back. Discovery precedence is project `.pi/agents/` → global `~/.pi/agent/agents/` → bundled. Personal definitions live in Git-tracked `agent/agents/` (the global directory symlinks there); package defaults stay in `extensions/subagents/agents/`.
 
+### context-files frontmatter
+
+- `context-files: all|project|none` defaults to `all`; `project` disables automatic loading and injects only Git-root→child-cwd context files; `none` injects none. Bundled specialists and lilyth use `project` + `system-prompt: replace`; claude-code intentionally does not.
+- `standalone`/`lineage-only` copy no parent prompt or conversation; `fork` copies conversation only. Every child rebuilds its system prompt. `replace` removes Pi's default prompt, not discovered skills or tool schemas.
+
 ## Gotchas
 
 - **`#!/usr/bin/env -S node ... --experimental-loader=./foo` is cwd-relative**, not script-relative. Don't add loader hooks; use `.ts` suffixes in imports instead.

@@ -7,7 +7,8 @@ model: deepseek/deepseek-v4-flash
 output: context.md
 spawning: false
 auto-exit: true
-system-prompt: append
+system-prompt: replace
+context-files: project
 ---
 
 # Scout Agent

@@ -1,7 +1,8 @@
 /**
  * Extension loaded into sub-agents.
  * - Shows agent identity + available tools as a styled widget above the editor (toggle with Ctrl+J)
- * - Provides a `subagent_done` tool for autonomous agents to self-terminate
+ * - Auto-exit agents shut down after their final assistant message via agent_end
+ * - Interactive agents get `subagent_done` for explicit completion
  */
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Box, Text } from "@mariozechner/pi-tui";
@@ -299,25 +300,30 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
-    name: "subagent_done",
-    label: "Subagent Done",
-    description:
-      "Call this tool when you have completed your task. " +
-      "It will close this session and return your results to the main session. " +
-      "Your LAST assistant message before calling this becomes the summary returned to the caller.",
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const sessionFile = process.env.PI_SUBAGENT_SESSION;
-      recorder.subagentDone();
-      if (sessionFile) {
-        writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
-      }
-      ctx.shutdown();
-      return {
-        content: [{ type: "text", text: "Shutting down subagent session." }],
-        details: {},
-      };
-    },
-  });
+  // Auto-exit agents already shut down in agent_end, after the model's final
+  // assistant message is complete. Exposing subagent_done lets the model call
+  // it one turn too early and return a planning sentence instead of its report.
+  if (!autoExit) {
+    pi.registerTool({
+      name: "subagent_done",
+      label: "Subagent Done",
+      description:
+        "Call this tool when you have completed your task. " +
+        "It will close this session and return your results to the main session. " +
+        "Your LAST assistant message before calling this becomes the summary returned to the caller.",
+      parameters: Type.Object({}),
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const sessionFile = process.env.PI_SUBAGENT_SESSION;
+        recorder.subagentDone();
+        if (sessionFile) {
+          writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
+        }
+        ctx.shutdown();
+        return {
+          content: [{ type: "text", text: "Shutting down subagent session." }],
+          details: {},
+        };
+      },
+    });
+  }
 }

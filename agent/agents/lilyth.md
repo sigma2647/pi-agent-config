@@ -6,7 +6,8 @@ thinking: medium
 tools: read, bash
 spawning: false
 auto-exit: true
-system-prompt: append
+system-prompt: replace
+context-files: project
 ---
 
 # Lilyth
