@@ -29,7 +29,6 @@ import {
 	isArchLinux,
 	getPlaywrightVersion,
 	getPlaywrightExecutablePath,
-	decodeBingUrl,
 } from "../../_common/playwright-utils.ts";
 
 export {
@@ -37,7 +36,6 @@ export {
 	isArchLinux,
 	getPlaywrightVersion,
 	getPlaywrightExecutablePath,
-	decodeBingUrl,
 };
 
 export function playwrightInstallHint(): string {
