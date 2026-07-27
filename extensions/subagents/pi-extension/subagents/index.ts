@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { keyHint } from "@mariozechner/pi-coding-agent";
 import { Type, type Static } from "@sinclair/typebox";
 import { Box, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readdirSync,
@@ -14,6 +14,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -57,9 +58,9 @@ import {
 /** Absolute path to `pi-extension/subagents`. https://github.com/nodejs/node/issues/37845 */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
-// Survive /reload: clear timers and abort poll loops from the previous module load.
-// /reload re-imports this file, giving fresh module-level state, but closures from
-// the old module keep running. See https://github.com/HazAT/pi-interactive-subagents/issues/5
+// Survive /reload: clear duplicate UI timers from the previous module load,
+// but keep background poll loops alive so already-started subagents can report
+// their results after the reload. See https://github.com/HazAT/pi-interactive-subagents/issues/5
 const WIDGET_INTERVAL_KEY = Symbol.for("pi-subagents/widget-interval");
 const STATUS_INTERVAL_KEY = Symbol.for("pi-subagents/status-interval");
 const POLL_ABORT_KEY = Symbol.for("pi-subagents/poll-abort-controller");
@@ -76,8 +77,9 @@ const POLL_ABORT_KEY = Symbol.for("pi-subagents/poll-abort-controller");
     (globalThis as any)[STATUS_INTERVAL_KEY] = null;
   }
   const prevAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
-  if (prevAbort) prevAbort.abort();
-  (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
+  if (!prevAbort || prevAbort.signal.aborted) {
+    (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
+  }
 }
 
 function getModuleAbortSignal(): AbortSignal {
@@ -1015,6 +1017,45 @@ function validateModelOverride(model: string | undefined, cli: string | undefine
   }
 }
 
+function isVoltaShimPath(filePath: string): boolean {
+  return filePath.split(/[\\/]+/).join("/").includes("/.volta/bin/");
+}
+
+function resolveVoltaPiExecutable(): string | null {
+  try {
+    const resolved = execFileSync("volta", ["which", "pi"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return resolved ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePiExecutable(options: {
+  env?: NodeJS.ProcessEnv;
+  argv?: string[];
+  voltaWhich?: () => string | null;
+} = {}): string {
+  const env = options.env ?? process.env;
+  const override = env.PI_SUBAGENT_PI_BIN?.trim();
+  if (override) return override;
+
+  const argv = options.argv ?? process.argv;
+  const argvExecutable = argv[1] && isAbsolute(argv[1]) && existsSync(argv[1]) ? argv[1] : null;
+
+  // Volta shims are context-sensitive: after `cd` into a child project, running
+  // the shim may fail with "Could not locate executable `pi` in your project".
+  // Prefer the real package executable behind the shim for subagent launches.
+  if (argvExecutable && !isVoltaShimPath(argvExecutable)) return argvExecutable;
+
+  const voltaExecutable = (options.voltaWhich ?? resolveVoltaPiExecutable)();
+  if (voltaExecutable) return voltaExecutable;
+
+  return argvExecutable ?? "pi";
+}
+
 export const __test__ = {
   borderLine,
   getShellReadyDelayMs,
@@ -1035,6 +1076,8 @@ export const __test__ = {
   resolveResultPresentation,
   resolveResumeLaunchBehavior,
   validateModelOverride,
+  isVoltaShimPath,
+  resolvePiExecutable,
   runningSubagents,
   formatElapsed,
   findGitRootSync,
@@ -1043,6 +1086,7 @@ export const __test__ = {
   resolveEffectiveContextFiles,
   CONTEXT_CANDIDATES,
   formatAgentPromptPolicy,
+  getModuleAbortSignal,
 };
 
 function startWidgetRefresh() {
@@ -1214,7 +1258,7 @@ async function launchSubagent(
   // ── Pi CLI path ──
 
   // Build pi command
-  const parts: string[] = ["pi"];
+  const parts: string[] = [shellEscape(resolvePiExecutable())];
   parts.push("--session", shellEscape(subagentSessionFile));
 
   const subagentDonePath = join(SUBAGENTS_DIR, "subagent-done.ts");
@@ -1542,7 +1586,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   });
 
   // Clean up on session shutdown
-  pi.on("session_shutdown", (_event, _ctx) => {
+  pi.on("session_shutdown", (event, _ctx) => {
     if (widgetInterval) {
       clearInterval(widgetInterval);
       widgetInterval = null;
@@ -1553,6 +1597,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       statusInterval = null;
       (globalThis as any)[STATUS_INTERVAL_KEY] = null;
     }
+
+    // A reload rebinds extensions while the Pi process keeps running. Do not
+    // turn that into a false subagent failure; the old watcher still owns the
+    // child pane and will steer the real result back when it finishes.
+    if ((event as any)?.reason === "reload") return;
+
     const moduleAbort = (globalThis as any)[POLL_ABORT_KEY] as AbortController | undefined;
     if (moduleAbort) moduleAbort.abort();
     for (const [_id, agent] of runningSubagents) {
@@ -1951,7 +2001,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 
         // Build pi resume command
-        const parts = ["pi", "--session", shellEscape(params.sessionPath)];
+        const parts = [shellEscape(resolvePiExecutable()), "--session", shellEscape(params.sessionPath)];
 
         // Load subagent-done extension so the agent can self-terminate if needed
         const subagentDonePath = join(SUBAGENTS_DIR, "subagent-done.ts");

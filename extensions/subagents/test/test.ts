@@ -1147,6 +1147,29 @@ describe("subagent discovery", () => {
     assert.doesNotThrow(() => testApi.validateModelOverride(undefined, undefined));
   });
 
+  it("resolvePiExecutable honors explicit override", () => {
+    assert.equal(
+      testApi.resolvePiExecutable({
+        env: { PI_SUBAGENT_PI_BIN: "/custom/pi" },
+        argv: ["node", "/ignored/pi"],
+        voltaWhich: () => "/ignored/volta/pi",
+      }),
+      "/custom/pi",
+    );
+  });
+
+  it("resolvePiExecutable avoids context-sensitive Volta shims", () => {
+    assert.equal(testApi.isVoltaShimPath("/Users/alice/.volta/bin/pi"), true);
+    assert.equal(
+      testApi.resolvePiExecutable({
+        env: {},
+        argv: ["node", "/Users/alice/.volta/bin/pi"],
+        voltaWhich: () => "/Users/alice/.volta/tools/image/packages/pkg/bin/pi",
+      }),
+      "/Users/alice/.volta/tools/image/packages/pkg/bin/pi",
+    );
+  });
+
   it("buildPiPromptArgs inserts separator for artifact-backed launches with skills", () => {
     assert.deepEqual(
       testApi.buildPiPromptArgs({ effectiveSkills: "review,lint", taskDelivery: "artifact", taskArg: "@artifact.md" }),
@@ -1704,6 +1727,51 @@ describe("tool registration", () => {
     const autoExitSchema = resumeTool.parameters.properties.autoExit;
     assert.equal(autoExitSchema.type, "boolean");
     assert.match(autoExitSchema.description, /Defaults to true/);
+  });
+});
+
+describe("subagent reload handling", () => {
+  it("keeps active watchers alive across extension reload", () => {
+    const testApi = (subagentsModule as any).__test__;
+    const { api, registeredEvents } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+
+    const shutdown = registeredEvents.find((entry) => entry.event === "session_shutdown");
+    assert.ok(shutdown, "expected a session_shutdown handler");
+
+    const childAbort = new AbortController();
+    testApi.runningSubagents.clear();
+    testApi.runningSubagents.set("child-1", {
+      id: "child-1",
+      name: "Worker",
+      task: "wait",
+      surface: "surface-1",
+      startTime: 0,
+      sessionFile: "/tmp/child.jsonl",
+      abortController: childAbort,
+      interactive: false,
+      statusState: createStatusState({ source: "pi", startTimeMs: 0 }),
+    });
+
+    const moduleSignal = testApi.getModuleAbortSignal();
+    shutdown.handler({ reason: "reload" }, {});
+
+    assert.equal(childAbort.signal.aborted, false);
+    assert.equal(moduleSignal.aborted, false);
+    assert.equal(testApi.runningSubagents.has("child-1"), true);
+
+    testApi.runningSubagents.clear();
+  });
+
+  it("does not abort active watchers when the module is re-imported", async () => {
+    const testApi = (subagentsModule as any).__test__;
+    const signal = testApi.getModuleAbortSignal();
+
+    const fresh = await import(`../pi-extension/subagents/index.ts?reload-test-${Date.now()}`);
+
+    assert.equal(signal.aborted, false);
+    assert.equal((fresh as any).__test__.getModuleAbortSignal().aborted, false);
+    assert.equal((fresh as any).__test__.getModuleAbortSignal(), signal);
   });
 });
 

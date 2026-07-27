@@ -1,7 +1,7 @@
 // backends/browser.ts
 
 import { spawn } from "node:child_process";
-import { loadPlaywright, decodeBingUrl } from "../../_common/playwright-utils.ts";
+import { loadPlaywright } from "../../_common/playwright-utils.ts";
 import type { Backend, SearchResult } from "./types.ts";
 import { which } from "../../_common/tools/cli-helpers.ts";
 
