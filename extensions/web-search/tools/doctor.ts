@@ -82,13 +82,13 @@ export async function runDoctor(): Promise<void> {
 	}
 	console.log(`  ${pad("opencli", COL1)} ${opencli ? OK + "  " + opencli + DIM + opencliStatus + RESET : BAD + "  not on PATH — backend skipped"}`);
 
-	// browser
+	// browser-probe
 	const cdpUrl = process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
 	const cdpHp = parseHostPort(cdpUrl);
 	const cdpUp = cdpHp ? await probeTcp(cdpHp.host, cdpHp.port) : false;
 	const harness = await which("browser-harness");
 	const browserOk = cdpUp || !!harness;
-	console.log(`  ${pad("browser", COL1)} ${browserOk ? OK : BAD}${browserOk ? "" : "  no CDP endpoint and no browser-harness — backend skipped"}`);
+	console.log(`  ${pad("browser-probe", COL1)} ${browserOk ? OK : BAD}${browserOk ? "" : "  no CDP endpoint and no browser-harness — backend skipped"}`);
 	console.log(`    ${pad("CDP", COL1-2)} ${cdpUp ? OK : WARN}  ${cdpUrl}${cdpUp ? "" : " (not reachable)"}`);
 	console.log(`    ${pad("harness", COL1-2)} ${harness ? OK : WARN}  ${harness ?? "(not on PATH)"}`);
 

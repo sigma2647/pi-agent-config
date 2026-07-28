@@ -1,12 +1,12 @@
 /**
  * Web Search — 多后端回退链版
  *
- * 默认链：brave → opencli → browser
+ * 默认链：brave → browser-probe → opencli
  * 配置：
- *   - PI_WEB_SEARCH_CHAIN="brave,opencli,browser"
- *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _OPENCLI / _BROWSER  (毫秒)
+ *   - PI_WEB_SEARCH_CHAIN="brave,browser-probe,opencli"
+ *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _BROWSER_PROBE / _OPENCLI  (毫秒)
  *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 15000)
- *   - PI_WEB_SEARCH_BROWSER_BACKEND=auto|harness|playwright
+ *   - PI_WEB_SEARCH_BROWSER_PROBE_BACKEND=auto|harness|playwright
  *   - BRAVE_SEARCH_API_KEY  (Brave 后端启用条件)
  *
  * 运行时调用参数 chain 数组可临时覆盖。
@@ -106,7 +106,7 @@ export default function (pi: ExtensionAPI) {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web via Brave → opencli → browser fallback chain. " +
+      "Search the web via Brave → browser-probe → opencli fallback chain. " +
       "Returns ranked URLs with titles and short snippets — NOT full page content. " +
       "To read a result's full content, call web_fetch on its URL. " +
       "For site-scoped search (Bilibili/Zhihu/YouTube/WeChat Official Accounts/etc.), prefer the site's opencli adapter (`opencli list`).",
@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
       proxy: Type.Optional(
         Type.String({
           description:
-            "Optional per-call proxy URL (e.g. http://127.0.0.1:7890). Honored by the brave backend; opencli inherits env; browser (CDP) ignores per-call override.",
+            "Optional per-call proxy URL (e.g. http://127.0.0.1:7890). Honored by the brave backend; opencli inherits env; browser-probe (CDP) ignores per-call override.",
         }),
       ),
     }),

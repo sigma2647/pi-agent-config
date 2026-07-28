@@ -6,25 +6,25 @@ tryLoadEnv();
 registerDefaultBackends();
 
 const USAGE = `usage:
-  pi-ws <query>                  full chain (brave → opencli → browser)
+  pi-ws <query>                  full chain (brave → browser-probe → opencli)
                                  default output is JSON (matches what the pi
                                  web_search agent tool returns, easy to pipe
                                  into jq).
   pi-ws --human <query>          human-readable output (numbered list)
   pi-ws --format json|human ...  same idea, explicit form
   pi-ws --fast <query>           query only the first backend (brave); skip
-                                 the slower opencli/browser fallbacks
+                                 the slower browser-probe/opencli fallbacks
   pi-ws --chain a,b <query>      override fallback chain for this call
   pi-ws --proxy <url> <query>    per-call proxy override (e.g. --proxy http://127.0.0.1:7890)
                                  honored by brave; opencli inherits env;
-                                 browser (CDP) ignores per-call override.
+                                 browser-probe (CDP) ignores per-call override.
   pi-ws --list                   list registered backends + effective chain
   pi-ws --doctor                 environment & backend self-check
   pi-ws --smoke                  quick end-to-end self-check (2 cases, ~5s)
   pi-ws --json <query>           alias for --format json (kept for muscle memory)
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
-  PI_WEB_SEARCH_CHAIN              "brave,opencli,browser"
+  PI_WEB_SEARCH_CHAIN              "brave,browser-probe,opencli"
   PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 15000
   PI_WEB_SEARCH_TIMEOUT_<BACKEND>  per-backend, ms
   BRAVE_SEARCH_API_KEY             required for the brave backend

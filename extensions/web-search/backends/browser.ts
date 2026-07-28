@@ -48,7 +48,7 @@ function getCdpUrl(): string {
 type PickedBackend = "harness" | "playwright" | "none";
 
 async function pickAvailable(): Promise<PickedBackend> {
-  const forced = process.env.PI_WEB_SEARCH_BROWSER_BACKEND;
+  const forced = process.env.PI_WEB_SEARCH_BROWSER_PROBE_BACKEND ?? process.env.PI_WEB_SEARCH_BROWSER_BACKEND;
   if (forced === "harness") {
     return (await which("browser-harness")) ? "harness" : "none";
   }
@@ -257,8 +257,8 @@ async function runPlaywright(
 
 // ---------- Backend ----------
 
-export const browserBackend: Backend = {
-  name: "browser",
+export const browserProbeBackend: Backend = {
+  name: "browser-probe",
 
   async isAvailable() {
     return (await pickAvailable()) !== "none";

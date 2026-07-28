@@ -122,7 +122,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 ## pi-ws 搜索后端
 
-三个后端按 `brave → opencli → browser` 顺序尝试，遇到第一个非空结果即停止。
+三个后端按 `brave → browser-probe → opencli` 顺序尝试，遇到第一个非空结果即停止。
 
 ### Brave（推荐，质量最好）
 
@@ -139,14 +139,14 @@ echo 'BRAVE_SEARCH_API_KEY=BSA...' >> ~/.env
 npm install -g @jackwener/opencli
 ```
 
-⚠️ **坑：opencli daemon 必须运行。** `pi-ws --doctor` 只检查 `which opencli`（二进制是否存在），不检查 daemon 是否在线。如果 daemon 未运行，opencli 后端会挂起直到超时（默认 6s），然后 fallback 到 browser。
+⚠️ **坑：opencli daemon 必须运行。** `pi-ws --doctor` 只检查 `which opencli`（二进制是否存在），不检查 daemon 是否在线。如果 daemon 未运行，opencli 后端会挂起直到超时（默认 6s），然后 fallback 到 browser-probe。
 
 验证 daemon：
 ```bash
 opencli status  # 或 opencli info
 ```
 
-### browser（CDP / Playwright）
+### browser-probe（CDP / Playwright）
 
 需要 Chromium 进程监听 `--remote-debugging-port=9222`：
 

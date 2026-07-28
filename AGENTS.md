@@ -30,7 +30,7 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 agent/agents/                 personal Git-managed agent definitions
 extensions/install.sh          unified CLI installer
 extensions/web-fetch/          single URL fetch/extract (pi-wf)
-extensions/web-search/         brave → opencli → browser search (pi-ws)
+extensions/web-search/         brave → browser-probe → opencli search (pi-ws)
 extensions/subagents/          async mux-backed subagent package
 extensions/_common/            shared utilities
 ```
@@ -38,7 +38,7 @@ extensions/_common/            shared utilities
 ## Fallback chains
 
 - **web-fetch:** domain extractor → Defuddle → Readability → Jina → Browser Probe → Playwright. Defuddle default; opt out with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`.
-- **web-search:** `brave → opencli → browser`, stop at first non-empty result. Exa is opt-in only.
+- **web-search:** `brave → browser-probe → opencli`, stop at first non-empty result. Exa is opt-in only.
 - **subagents:** async fire-and-return; results arrive automatically. Bundled specialists use `system-prompt: replace` + `context-files: project`.
 
 ## Collaboration patterns

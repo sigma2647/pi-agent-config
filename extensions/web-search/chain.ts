@@ -5,7 +5,7 @@ import { filterRelevant } from "./validate.ts";
 import { braveBackend } from "./backends/brave.ts";
 import { exaBackend } from "./backends/exa.ts";
 import { opencliBackend } from "./backends/opencli.ts";
-import { browserBackend } from "./backends/browser.ts";
+import { browserProbeBackend } from "./backends/browser.ts";
 
 const REGISTRY = new Map<string, Backend>();
 
@@ -21,7 +21,7 @@ export function registerDefaultBackends(): void {
   registerBackend(braveBackend);
   registerBackend(exaBackend);
   registerBackend(opencliBackend);
-  registerBackend(browserBackend);
+  registerBackend(browserProbeBackend);
 }
 
 export function listBackends(): string[] {
@@ -38,11 +38,11 @@ const DEFAULT_TIMEOUTS: Record<string, number> = {
   brave: 4000,
   exa: 5000,
   opencli: 20000,
-  browser: 10000,
+  "browser-probe": 15000,
 };
 
 const DEFAULT_TOTAL_TIMEOUT_MS = 25000;
-const DEFAULT_CHAIN = ["brave", "opencli", "browser"];
+const DEFAULT_CHAIN = ["brave", "browser-probe", "opencli"];
 
 // Single source of truth for the one user-facing chain knob. Both entry points
 // (index.ts tool param, dev.ts --fast flag) describe it from here and pass the
@@ -51,7 +51,7 @@ const DEFAULT_CHAIN = ["brave", "opencli", "browser"];
 // meaning here and the signature below; the entry points just pass through.
 export const FAST_OPTION_DESC =
   "Query only the first backend in the chain (fail-fast, lowest latency); " +
-  "skip the slower opencli/browser fallbacks even if the first returns nothing.";
+  "skip the slower browser-probe/opencli fallbacks even if the first returns nothing.";
 
 export function loadConfig(override?: {
   chain?: string[];

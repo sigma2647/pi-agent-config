@@ -27,7 +27,7 @@ extensions/
 ├── web-search/          ← multi-backend search                          (pi-ws)
 │   ├── chain.ts         ← backend registry + chain dispatcher
 │   ├── validate.ts      ← relevance filtering (keyword-match results against query)
-│   └── backends/        ← one file per source (brave/exa/opencli/browser)
+│   └── backends/        ← one file per source (brave/exa/browser-probe/opencli)
 ├── subagents/           ← vendored pi-interactive-subagents package
 │   ├── package.json     ← pi entrypoint: ./pi-extension/subagents/index.ts
 │   ├── pi-extension/    ← async mux-backed subagent extension implementation
@@ -67,7 +67,7 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **web-fetch** (per URL): `domain extractor → defuddle → http+Readability → Jina Reader → Playwright (gated)`. Defuddle is the default because its metadata, sections, and Pandoc footnotes are more LLM-friendly for ~260ms extra. Opt out with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`; `--defuddle` remains a no-op alias.
 
-**web-search** (per query): `brave → opencli → browser`, stopping at the first non-empty result by design; do not add fan-out/RRF. Exa is registered but opt-in via `PI_WEB_SEARCH_CHAIN` or `--chain exa`. `fast` queries only the first backend. CLI output defaults to JSON (`--human` / `PI_WS_FORMAT=human` opt out), and unknown flags are errors. `--proxy` overrides Brave only; opencli inherits env and the already-running browser keeps its launch proxy. The backend registry and types are re-exported for third parties.
+**web-search** (per query): `brave → browser-probe → opencli`, stopping at the first non-empty result by design; do not add fan-out/RRF. Exa is registered but opt-in via `PI_WEB_SEARCH_CHAIN` or `--chain exa`. `fast` queries only the first backend. CLI output defaults to JSON (`--human` / `PI_WS_FORMAT=human` opt out), and unknown flags are errors. `--proxy` overrides Brave only; opencli inherits env and the already-running browser keeps its launch proxy. The backend registry and types are re-exported for third parties.
 
 **`web_search` is general-web only.** Site-scoped search belongs in an opencli adapter plus a concrete `promptGuidelines` pointer, never in the stop-at-first-non-empty backend chain. URL extraction remains a separate `web-fetch` concern.
 
