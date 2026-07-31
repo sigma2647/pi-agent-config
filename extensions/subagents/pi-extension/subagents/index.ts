@@ -1033,10 +1033,23 @@ function resolveVoltaPiExecutable(): string | null {
   }
 }
 
+function resolvePathPiExecutable(): string | null {
+  try {
+    const resolved = execFileSync("sh", ["-lc", "command -v pi"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return resolved ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolvePiExecutable(options: {
   env?: NodeJS.ProcessEnv;
   argv?: string[];
   voltaWhich?: () => string | null;
+  pathWhich?: () => string | null;
 } = {}): string {
   const env = options.env ?? process.env;
   const override = env.PI_SUBAGENT_PI_BIN?.trim();
@@ -1052,6 +1065,9 @@ function resolvePiExecutable(options: {
 
   const voltaExecutable = (options.voltaWhich ?? resolveVoltaPiExecutable)();
   if (voltaExecutable) return voltaExecutable;
+
+  const pathExecutable = (options.pathWhich ?? resolvePathPiExecutable)();
+  if (pathExecutable && isAbsolute(pathExecutable) && !isVoltaShimPath(pathExecutable)) return pathExecutable;
 
   return argvExecutable ?? "pi";
 }

@@ -1170,6 +1170,18 @@ describe("subagent discovery", () => {
     );
   });
 
+  it("resolvePiExecutable resolves bare pi from PATH before launching in a child shell", () => {
+    assert.equal(
+      testApi.resolvePiExecutable({
+        env: {},
+        argv: ["node", "pi"],
+        voltaWhich: () => null,
+        pathWhich: () => "/home/alice/.npm-global/bin/pi",
+      }),
+      "/home/alice/.npm-global/bin/pi",
+    );
+  });
+
   it("buildPiPromptArgs inserts separator for artifact-backed launches with skills", () => {
     assert.deepEqual(
       testApi.buildPiPromptArgs({ effectiveSkills: "review,lint", taskDelivery: "artifact", taskArg: "@artifact.md" }),
