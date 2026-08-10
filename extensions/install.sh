@@ -10,8 +10,10 @@
 #   }
 #
 # This installer scans every */package.json, reads .pi.cli, and creates one
-# symlink per entry in $BIN_DIR (default ~/.local/bin). One source of truth,
-# no per-extension install.sh.
+# wrapper script per entry in $BIN_DIR (default ~/.local/bin). On Unix it
+# symlinks the dev.ts entry; on Windows / MSYS it writes bash + .cmd wrappers
+# that invoke node --experimental-strip-types. One source of truth, no
+# per-extension install.sh.
 #
 # Usage:
 #   ./install.sh                # install all declared CLIs
@@ -55,7 +57,7 @@ list_entries() {
 			(.pi.cli // empty)
 			| if type == "array" then .[] else . end
 			| [.name, .entry] | @tsv
-		' "$pkg" 2>/dev/null | while IFS=$'\t' read -r name entry; do
+		' "$pkg" 2>/dev/null | tr -d '\r' | while IFS=$'\t' read -r name entry; do
 			[[ -n "$name" && -n "$entry" ]] || continue
 			# Resolve entry relative to the extension dir.
 			local abs="$ext_dir/$entry"
@@ -79,6 +81,10 @@ cmd_list() {
 	done <<< "$rows"
 }
 
+is_msys() {
+	[[ "$(uname -s 2>/dev/null)" == MINGW* || "$(uname -s 2>/dev/null)" == MSYS* ]]
+}
+
 cmd_install() {
 	local rows count=0 missing=()
 	rows="$(list_entries)"
@@ -94,8 +100,23 @@ cmd_install() {
 			continue
 		fi
 		chmod +x "$abs"
-		ln -sf "$abs" "$BIN_DIR/$name"
-		printf "  ${G}linked${N} %-18s -> %s\n" "$name" "$abs"
+		if is_msys; then
+			# Windows: create bash + .cmd wrappers (ln -sf degrades to copy)
+			cat > "$BIN_DIR/$name" <<WRAPPER
+#!/usr/bin/env bash
+exec node --experimental-strip-types --no-warnings "$abs" "\$@"
+WRAPPER
+			chmod +x "$BIN_DIR/$name"
+			# .cmd wrapper for PowerShell / CMD
+			cat > "$BIN_DIR/$name.cmd" <<CMDWRAP
+@echo off
+node --experimental-strip-types --no-warnings "$abs" %*
+CMDWRAP
+			printf "  ${G}wrote${N}  %-18s + .cmd -> %s\n" "$name" "$abs"
+		else
+			ln -sf "$abs" "$BIN_DIR/$name"
+			printf "  ${G}linked${N} %-18s -> %s\n" "$name" "$abs"
+		fi
 		count=$((count + 1))
 	done <<< "$rows"
 
@@ -110,7 +131,11 @@ cmd_install() {
 		*":$BIN_DIR:"*) ;;
 		*)
 			echo
-			echo "${Y}note:${N} $BIN_DIR is not in PATH. Add to ~/.zshrc:"
+			if is_msys; then
+				echo "${Y}note:${N} $BIN_DIR is not in PATH. Add to ~/.bashrc:"
+			else
+				echo "${Y}note:${N} $BIN_DIR is not in PATH. Add to ~/.zshrc:"
+			fi
 			echo "  export PATH=\"$BIN_DIR:\$PATH\""
 			;;
 	esac
@@ -140,8 +165,6 @@ cmd_uninstall() {
 		[[ -n "$name" ]] || continue
 		local link="$BIN_DIR/$name"
 		if [[ -L "$link" ]]; then
-			# Only remove if it points into our extensions tree, to avoid
-			# nuking an unrelated `pi-wf` someone else dropped in BIN_DIR.
 			local target
 			target="$(readlink -f "$link" 2>/dev/null || true)"
 			if [[ "$target" == "$EXT_DIR/"* ]]; then
@@ -151,11 +174,18 @@ cmd_uninstall() {
 			else
 				printf "  ${Y}skipped${N} %s (not ours: -> %s)\n" "$link" "$target"
 			fi
-		elif [[ -e "$link" ]]; then
-			printf "  ${Y}skipped${N} %s (not a symlink)\n" "$link"
+		elif [[ -f "$link" ]]; then
+			# Wrapper script written by this installer — check it references EXT_DIR
+			if grep -qF "$EXT_DIR" "$link" 2>/dev/null; then
+				rm -f "$link" "$link.cmd"
+				printf "  ${R}removed${N} %s (wrapper)\n" "$link"
+				count=$((count + 1))
+			else
+				printf "  ${Y}skipped${N} %s (not ours)\n" "$link"
+			fi
 		fi
 	done <<< "$rows"
-	printf "${R}removed %d symlink(s)${N}\n" "$count"
+	printf "${R}removed %d item(s)${N}\n" "$count"
 }
 
 case "${1:-install}" in
