@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Top-level session orchestration — subagent routing, context hygiene, and implementation discipline. For the main agent driving the scout/researcher/worker harness; not intended to run inside a subagent.
+description: "Top-level session orchestration for the main agent — subagent routing, context hygiene, and implementation discipline. Load whenever the conversation involves subagents: dispatching scout/researcher/worker tasks, planning parallel work, debugging why a subagent did something, or discussing subagent behavior. Not intended to run inside a subagent."
 ---
 
 # Session Orchestration
