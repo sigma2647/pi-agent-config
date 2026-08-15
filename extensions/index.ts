@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import * as fs from "node:fs";
 import { LspClient, detectLsp, pathToUri } from "./lsp-client";
+import deepseekCacheOptimizer from "./deepseek-cache-optimizer/index";
 
 // Shared state
 let client: LspClient | null = null;
@@ -19,6 +20,9 @@ function ensureDidOpen(filePath: string, client: LspClient) {
 }
 
 export default async function (pi: ExtensionAPI) {
+  // ── DeepSeek prefix-cache optimizer (CWD 前缀稳定 + 压缩前缀复用 + 遥测) ──
+  deepseekCacheOptimizer(pi);
+
   // ── Auto-start LSP on session start ──
   pi.on("session_start", async (_event, ctx) => {
     const config = detectLsp(ctx.cwd);
