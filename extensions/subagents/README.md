@@ -178,7 +178,7 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 | `agent`                | string  | —              | Load defaults from agent definition                                                               |
 | `fork`                 | boolean | `false`        | Force the full-context fork mode for this spawn, overriding any agent `session-mode` frontmatter  |
 | `interactive`          | boolean | derived        | Mark this spawn as interactive (don't wake the parent on stall/recovery). Defaults to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit`. |
-| `model`                | string  | —              | Override agent's default model                                                                    |
+| `model`                | string  | session model  | Override the model. Resolution: param → agent `model` frontmatter → parent session's current model. Must be an exact `provider/model` reference available in this session (see `subagents_list`); unavailable references are rejected at spawn time. |
 | `systemPrompt`         | string  | —              | Append to system prompt                                                                           |
 | `skills`               | string  | —              | Comma-separated skill names                                                                       |
 | `tools`                | string  | —              | Comma-separated tool names                                                                        |
@@ -283,7 +283,6 @@ Place a `.md` file in `.pi/agents/` (project) or `~/.pi/agent/agents/` (global):
 ---
 name: my-agent
 description: Does something specific
-model: anthropic/claude-sonnet-4-6
 thinking: minimal
 tools: read, bash, edit, write
 session-mode: lineage-only
@@ -295,13 +294,39 @@ spawning: false
 You are a specialized agent that does X...
 ```
 
+### Model resolution
+
+Nothing is hardcoded to a provider. The child's model resolves in this order:
+
+1. Explicit `model` tool param
+2. Agent frontmatter `model` (optional pin, validated against the session's available models — a stale value fails fast instead of crashing the child)
+3. **The subagent model pool** (if configured) — a prioritized list; the first entry that is available in this session and not in cooldown wins
+4. **The parent session's current model** — the default when no pool is configured. Subagents follow whatever model the main session runs, so switching providers requires no agent-file edits.
+5. If none resolve, no `--model` is passed and the child uses its own default from settings.
+
+#### Model pool (priority order + automatic fallback)
+
+When a subagent dies from a **provider error** (429 rate limit, overload — the child's own auto-retry already exhausted), the run is **automatically relaunched on the next pool entry** instead of surfacing the failure. Each entry is tried at most once per spawn; models that failed go into a **cooldown** (default 10 min) so parallel spawns skip them too. The result message shows the fallback trail (e.g. `Model fallback: glm-5.3 → glm-5.2 …`).
+
+Configure the pool in `<agent config dir>/subagent-models.txt` (one `provider/model` per line, `#` comments), or override with the env var `PI_SUBAGENT_MODEL_POOL` (comma- or newline-separated). Cooldown length: `PI_SUBAGENT_MODEL_COOLDOWN_MS` (default `600000`).
+
+```
+# ~/.pi/agent/subagent-models.txt
+zai-coding-cn/glm-5.3
+zai-coding-cn/glm-5.2
+deepseek/deepseek-v4-pro
+deepseek/deepseek-v4-flash
+```
+
+Call `subagents_list` to see the active pool (including which entries are in cooldown). Claude CLI children (`cli: claude`) ignore the pool — `claude --model` has different semantics.
+
 ### Frontmatter Reference
 
 | Field         | Type    | Description                                                                                                                                                                                                                                                                 |
 | ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`        | string  | Agent name (used in `agent: "my-agent"`)                                                                                                                                                                                                                                    |
 | `description` | string  | Shown in `subagents_list` output                                                                                                                                                                                                                                            |
-| `model`       | string  | Default model (e.g. `anthropic/claude-sonnet-4-6`)                                                                                                                                                                                                                          |
+| `model`       | string  | Optional model pin (`provider/model`). Validated against the session's available models at spawn time. Omit to inherit the parent session's current model — recommended when you switch providers often.                                                                                                                                    |
 | `thinking`    | string  | Thinking level: `minimal`, `medium`, `high`                                                                                                                                                                                                                                 |
 | `tools`       | string  | Comma-separated **native pi tools only**: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`                                                                                                                                                                             |
 | `skills`      | string  | Comma-separated skill names to auto-load                                                                                                                                                                                                                                    |

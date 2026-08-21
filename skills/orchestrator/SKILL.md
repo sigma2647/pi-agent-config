@@ -217,8 +217,8 @@ Follow this contract exactly:
 
 | Situation | Required action |
 |-----------|-----------------|
-| Normal spawn | Omit `model`; use the agent definition's configured model. |
-| A user or workflow requires a model override | Call `subagents_list` (or `pi --list-models`), then copy an exact available `provider/model` reference into `model`. Never infer one from the parent model or memory. |
+| Normal spawn | Apply per-task model selection (below). When in doubt, omit `model` and let the child inherit the parent session's model. |
+| User names a specific model | Call `subagents_list`, copy the exact `provider/model` reference into `model`. Never write a model id from memory; the extension rejects unavailable refs at spawn time. |
 | Unknown agent name | The tool rejects it and lists the available agents. Pick from that list; do not retry the same name. |
 | Stop a running child turn | Use `subagent_interrupt` with the exact `id` or `name`. |
 | Resume a child | Use `subagent_resume`. |
@@ -228,6 +228,24 @@ Follow this contract exactly:
 There is no `subagent_close` tool. Do not substitute raw `tmux`, `herdr`,
 `cmux`, `zellij`, or `wezterm` lifecycle commands; the extension owns pane
 creation and closure.
+
+### Per-task model selection
+
+Before the first dispatch in a session, call `subagents_list` once and note the
+available models — they change with the user's provider setup, so never assume
+them. On each dispatch, set `model` by task class:
+
+- **Light tier — scout, researcher, visual checks, any read-only sweep**: pick a
+  cheap/fast model from the list. Telltale ids: `flash`, `mini`, `air`, `lite`,
+  `haiku`.
+- **Heavy tier — planner, reviewer, complex or high-risk worker tasks**: pick a
+  strong model. Telltale ids: `pro`, `max`, `opus`, or the plain flagship name
+  with no tier marker.
+
+Hard rules: use only refs that appear in the `subagents_list` output; if the
+list has a single model, no clear tiers, or you cannot tell, omit `model` and
+inherit the parent session's model — a valid default beats a guessed override.
+Re-list when the user changes providers mid-session.
 
 ## Implementation Discipline
 

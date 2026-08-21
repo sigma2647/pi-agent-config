@@ -4,7 +4,6 @@ description: Deep web researcher — combines general search, site adapters, Zhi
 tools: web_search, web_fetch, bash
 skills: opencli-usage, zhihu, browser-probe
 deny-tools: claude
-model: deepseek/deepseek-v4-flash
 spawning: false
 auto-exit: true
 system-prompt: replace

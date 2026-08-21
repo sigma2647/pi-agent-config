@@ -1147,6 +1147,55 @@ describe("subagent discovery", () => {
     assert.doesNotThrow(() => testApi.validateModelOverride(undefined, undefined));
   });
 
+  it("resolveEffectiveModel prefers param, then agent frontmatter, then the parent session model", () => {
+    const ctx = {
+      model: { provider: "p", id: "m1" },
+      modelRegistry: { getAvailable: () => [{ provider: "p", id: "m1" }, { provider: "p", id: "m2" }] },
+    };
+
+    assert.deepEqual(testApi.resolveEffectiveModel({ model: "p/m2" }, null, ctx), {
+      model: "p/m2",
+      source: "param",
+    });
+    assert.deepEqual(testApi.resolveEffectiveModel({}, { model: "p/m2" }, ctx), {
+      model: "p/m2",
+      source: "agent",
+    });
+    assert.deepEqual(testApi.resolveEffectiveModel({}, null, ctx), {
+      model: "p/m1",
+      source: "session",
+    });
+    assert.deepEqual(testApi.resolveEffectiveModel({}, null, {}), {
+      source: "settings-default",
+    });
+  });
+
+  it("resolveEffectiveModel rejects models missing from the session registry", () => {
+    const ctx = { modelRegistry: { getAvailable: () => [{ provider: "p", id: "m1" }] } };
+    assert.throws(() => testApi.resolveEffectiveModel({ model: "p/stale" }, null, ctx), /not available/);
+    assert.throws(() => testApi.resolveEffectiveModel({}, { model: "p/stale" }, ctx), /not available/);
+  });
+
+  it("resolveEffectiveModel skips availability checks without a registry and for Claude agents", () => {
+    assert.doesNotThrow(() => testApi.resolveEffectiveModel({ model: "p/anything" }, null, {}));
+    assert.doesNotThrow(() => testApi.resolveEffectiveModel({ model: "sonnet" }, { cli: "claude" }, {
+      modelRegistry: { getAvailable: () => [] },
+    }));
+  });
+
+  it("resolveEffectiveModel does not inherit the parent pi model for Claude CLI agents", () => {
+    const ctx = { model: { provider: "zai-coding-cn", id: "glm-5.3" } };
+    assert.deepEqual(
+      testApi.resolveEffectiveModel({}, { cli: "claude" }, ctx),
+      { source: "settings-default" },
+    );
+    // Explicit overrides still pass through for claude agents.
+    assert.deepEqual(
+      testApi.resolveEffectiveModel({ model: "sonnet" }, { cli: "claude" }, ctx),
+      { model: "sonnet", source: "param" },
+    );
+  });
+
   it("resolvePiExecutable honors explicit override", () => {
     assert.equal(
       testApi.resolvePiExecutable({

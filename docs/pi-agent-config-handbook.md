@@ -73,6 +73,8 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **subagents** is a vendored async mux package loaded through its own `package.json`; it returns immediately, shows a live widget, and steers results back. Discovery precedence is project `.pi/agents/` → global `~/.pi/agent/agents/` → bundled. Personal definitions live in Git-tracked `agent/agents/` (the global directory symlinks there); package defaults stay in `extensions/subagents/agents/`.
 
+**Subagent model pool:** subagents prefer a prioritized model list — `~/.pi/agent/subagent-models.txt` (one `provider/model` per line) or `PI_SUBAGENT_MODEL_POOL` env — instead of inheriting the parent session's model. A run killed by a provider error (429/overload) auto-relaunches on the next pool entry; failed models go into cooldown (`PI_SUBAGENT_MODEL_COOLDOWN_MS`, default 10 min). Single source: the file is authoritative, env only overrides it; no other locations. Tests: `extensions/subagents/test/model-pool.test.ts`.
+
 ### context-files frontmatter
 
 - `context-files: all|project|none` defaults to `all`; `project` disables automatic loading and injects only Git-root→child-cwd context files; `none` injects none. Bundled specialists and lilyth use `project` + `system-prompt: replace`; claude-code intentionally does not.

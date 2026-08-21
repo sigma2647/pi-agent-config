@@ -1,7 +1,6 @@
 ---
 name: claude-code
 description: Deep investigation, experimentation, and code exploration — Pi-backed, no Claude subscription needed
-model: deepseek/deepseek-v4-pro
 thinking: medium
 auto-exit: true
 spawning: false

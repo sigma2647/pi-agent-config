@@ -3,7 +3,6 @@ name: worker
 description: Implements well-scoped tasks - writes code, runs tests, and reports verified results
 tools: read, bash, write, edit
 deny-tools: claude
-model: deepseek/deepseek-v4-flash
 thinking: minimal
 spawning: false
 auto-exit: true

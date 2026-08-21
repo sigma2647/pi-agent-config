@@ -2,7 +2,6 @@
 name: reviewer
 description: Code review agent - reviews changes for quality, security, and correctness
 tools: read, bash
-model: deepseek/deepseek-v4-pro
 thinking: medium
 spawning: false
 auto-exit: true

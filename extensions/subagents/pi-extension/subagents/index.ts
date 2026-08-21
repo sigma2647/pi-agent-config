@@ -88,7 +88,7 @@ function getModuleAbortSignal(): AbortSignal {
 
 /**
  * List the models actually available to this session as canonical
- * `provider/model` references (e.g. "deepseek/deepseek-v4-flash").
+ * `provider/model` references (e.g. "zai-coding-cn/glm-5.3").
  *
  * Reads the in-process ModelRegistry from the extension context — no subprocess,
  * no `pi --list-models` shell-out. Spawning `pi` here would be re-entrant: this
@@ -121,7 +121,9 @@ const SubagentParams = Type.Object({
     Type.String({
       description:
         "Model override as an exact provider/model reference (format: provider/model-id). " +
-        "Omit to use the agent default. Call subagents_list to see the models available in this session. " +
+        "Resolution: this param → agent frontmatter `model` → the configured subagent model pool → the parent session's current model. " +
+        "On provider errors (e.g. 429) the run automatically falls through the remaining pool; subagents_list shows the pool. " +
+        "Call subagents_list to see the models available in this session; unavailable references are rejected. " +
         "Bare aliases are only supported for Claude CLI agents.",
     }),
   ),
@@ -576,10 +578,23 @@ function resolveResultPresentation(
     "exitCode" | "elapsed" | "summary" | "sessionFile" | "errorMessage"
   >,
   name: string,
+  modelInfo?: { model?: string; fallbackFrom?: string[] },
 ): string {
   const sessionRef = result.sessionFile
     ? `\n\nSession: ${result.sessionFile}\nResume: pi --session ${result.sessionFile}`
     : "";
+
+  // Model-pool trail: shown when the run survived (or exhausted) fallbacks.
+  const trail =
+    modelInfo?.fallbackFrom?.length && modelInfo.model
+      ? [...modelInfo.fallbackFrom, modelInfo.model].map((m) => bareModelRef(m).split("/").pop() ?? m)
+      : [];
+  const exhaustedNote =
+    trail.length && result.errorMessage
+      ? `\n\nModels tried: ${trail.join(" → ")} — all failed with provider errors.`
+      : trail.length
+        ? `\n\nModel fallback: ${trail.join(" → ")} after provider errors on earlier models.`
+        : "";
 
   if (result.errorMessage) {
     // Auto-retry exhausted or other agent-loop error. The subagent did not
@@ -589,15 +604,15 @@ function resolveResultPresentation(
     return (
       `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
       `(provider/agent error — auto-retry exhausted).\n\n` +
-      `Error: ${result.errorMessage}\n\n` +
+      `Error: ${result.errorMessage}${exhaustedNote}\n\n` +
       `The subagent did not produce a result. You can retry by spawning a new ` +
       `subagent or resume the session with subagent_resume.${sessionRef}`
     );
   }
 
   return result.exitCode !== 0
-    ? `Sub-agent "${name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${sessionRef}`
-    : `Sub-agent "${name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${sessionRef}`;
+    ? `Sub-agent "${name}" failed (exit code ${result.exitCode}).\n\n${result.summary}${exhaustedNote}${sessionRef}`
+    : `Sub-agent "${name}" completed (${formatElapsed(result.elapsed)}).\n\n${result.summary}${exhaustedNote}${sessionRef}`;
 }
 
 /**
@@ -639,6 +654,12 @@ interface RunningSubagent {
   abortController?: AbortController;
   cli?: string;
   sentinelFile?: string;
+  /** Ordered model fallback chain (provider/model refs, priority order). */
+  modelChain?: string[];
+  /** Index into modelChain of the model the current attempt runs on. */
+  modelAttempt?: number;
+  /** Models that already failed with provider errors in this spawn chain. */
+  fallbackFrom?: string[];
   statusState: SubagentStatusState;
   /**
    * When true, status transitions (stalled/recovered) do not wake the parent
@@ -1038,6 +1059,203 @@ function validateModelOverride(model: string | undefined, cli: string | undefine
   }
 }
 
+/** Context slice needed for model resolution: the parent session's current model and the registry. */
+interface ModelResolutionContext {
+  model?: { provider: string; id: string } | undefined;
+  modelRegistry?: { getAvailable(): Array<{ provider: string; id: string }> } | undefined;
+}
+
+/**
+ * Fail fast when an explicit model override (tool param or agent frontmatter)
+ * is not available in this session. A stale hardcoded model would otherwise
+ * crash the child pi at startup with an opaque error inside its pane.
+ */
+function assertModelAvailable(model: string, ctx: ModelResolutionContext): void {
+  const available = listAvailableModelRefs(ctx);
+  if (available.length === 0) return; // registry unavailable — do not block the launch
+  const bare = model.split(":")[0];
+  if (!available.includes(bare)) {
+    throw new Error(
+      `Model "${model}" is not available in this session. Available models:\n` +
+        `${available.map((m) => `• ${m}`).join("\n")}\n` +
+        `Pick one from this list, or drop the override / the agent's "model" frontmatter to inherit the parent session's model.`,
+    );
+  }
+}
+
+/**
+ * Resolve the model used to launch a child session.
+ *
+ * Order: explicit `model` param → agent frontmatter `model` → the parent
+ * session's current model. Nothing is hardcoded to a provider: agents that
+ * don't pin a model simply follow whatever model the parent session runs,
+ * so switching providers requires no agent-file edits. When nothing
+ * resolves, no --model flag is passed and the child falls back to its own
+ * default model from settings.
+ */
+function resolveEffectiveModel(
+  params: { model?: string },
+  agentDefs: AgentDefaults | null,
+  ctx: ModelResolutionContext,
+): { model?: string; source: "param" | "agent" | "session" | "settings-default" } {
+  const explicit = params.model ?? agentDefs?.model;
+  if (explicit) {
+    validateModelOverride(explicit, agentDefs?.cli);
+    if (agentDefs?.cli !== "claude") assertModelAvailable(explicit, ctx);
+    return { model: explicit, source: params.model ? "param" : "agent" };
+  }
+  if (ctx.model && agentDefs?.cli !== "claude") {
+    // Claude CLI children don't understand pi provider refs — only pi children
+    // inherit the parent session's model; claude children use their own default.
+    return { model: `${ctx.model.provider}/${ctx.model.id}`, source: "session" };
+  }
+  return { source: "settings-default" };
+}
+
+// ── Subagent model pool ──
+// A prioritized list of provider/model refs that subagents prefer at spawn
+// time and fall through automatically when a provider error (e.g. 429 rate
+// limit) kills a run. Config sources, first wins:
+//   1. PI_SUBAGENT_MODEL_POOL env var (comma- or newline-separated refs)
+//   2. <agent config dir>/subagent-models.txt (one ref per line, # comments)
+// A model that failed with a provider error is skipped for a cooldown period
+// (PI_SUBAGENT_MODEL_COOLDOWN_MS, default 10 min) so parallel spawns avoid it.
+
+const SUBAGENT_MODEL_POOL_FILENAME = "subagent-models.txt";
+const DEFAULT_MODEL_COOLDOWN_MS = 10 * 60_000;
+
+/** Strip a `:thinking` suffix from a model reference. */
+function bareModelRef(ref: string): string {
+  return ref.split(":")[0];
+}
+
+/** Parse subagent-models.txt content into an ordered list of model refs. */
+function parseModelPoolLines(text: string): string[] {
+  const refs: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.split("#")[0].trim();
+    const slash = line.indexOf("/");
+    if (slash <= 0 || slash === line.length - 1) continue; // skip blanks/malformed
+    if (!refs.includes(line)) refs.push(line);
+  }
+  return refs;
+}
+
+/** Read the configured pool: env override first, then the config file. */
+function readConfiguredModelPool(): string[] {
+  const env = process.env.PI_SUBAGENT_MODEL_POOL?.trim();
+  if (env) {
+    return env
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.indexOf("/") > 0 && s.indexOf("/") < s.length - 1);
+  }
+  try {
+    const file = join(getAgentConfigDir(), SUBAGENT_MODEL_POOL_FILENAME);
+    return parseModelPoolLines(readFileSync(file, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function getModelCooldownMs(): number {
+  const raw = process.env.PI_SUBAGENT_MODEL_COOLDOWN_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MODEL_COOLDOWN_MS;
+}
+
+/** model ref → timestamp until which spawns skip it after a provider failure. */
+const modelCooldowns = new Map<string, number>();
+
+function isModelCooling(ref: string | undefined): boolean {
+  if (!ref) return false;
+  const bare = bareModelRef(ref);
+  const until = modelCooldowns.get(bare);
+  if (until === undefined) return false;
+  if (until <= Date.now()) {
+    modelCooldowns.delete(bare);
+    return false;
+  }
+  return true;
+}
+
+/** Record a provider-error failure; later spawns skip this model while cooling. */
+function markModelFailed(ref: string | undefined): void {
+  if (!ref) return;
+  modelCooldowns.set(bareModelRef(ref), Date.now() + getModelCooldownMs());
+}
+
+function clearModelCooldowns(): void {
+  modelCooldowns.clear();
+}
+
+/**
+ * Ordered fallback chain for a spawn: explicit `model` param → agent
+ * frontmatter `model` → configured pool → parent session model. Deduped on
+ * bare refs; pool entries not present in this session's registry are skipped.
+ * Claude CLI children get no pool (claude --model has different semantics).
+ */
+function buildModelChain(
+  params: { model?: string },
+  agentDefs: AgentDefaults | null,
+  ctx: ModelResolutionContext,
+): string[] {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  const push = (ref?: string) => {
+    if (!ref) return;
+    const bare = bareModelRef(ref);
+    if (seen.has(bare)) return;
+    seen.add(bare);
+    chain.push(ref);
+  };
+
+  push(params.model);
+  if (agentDefs?.cli === "claude") return chain;
+
+  push(agentDefs?.model);
+  const available = listAvailableModelRefs(ctx);
+  for (const ref of readConfiguredModelPool()) {
+    if (available.length === 0 || available.includes(bareModelRef(ref))) push(ref);
+  }
+  if (ctx.model) push(`${ctx.model.provider}/${ctx.model.id}`);
+  return chain;
+}
+
+/**
+ * Resolve the launch model plus the full fallback chain. Keeps the existing
+ * head resolution order (param → agent → pool → session) with explicit-ref
+ * validation, and skips models that are cooling down from a recent provider
+ * failure. `model` may be undefined only when nothing resolves (claude
+ * children / empty registry) — then no --model flag is passed.
+ */
+function resolveEffectiveModelWithPool(
+  params: { model?: string },
+  agentDefs: AgentDefaults | null,
+  ctx: ModelResolutionContext,
+): { model?: string; chain: string[]; source: "param" | "agent" | "pool" | "session" | "settings-default" } {
+  const explicit = params.model ?? agentDefs?.model;
+  if (explicit) {
+    validateModelOverride(explicit, agentDefs?.cli);
+    if (agentDefs?.cli !== "claude") assertModelAvailable(explicit, ctx);
+  }
+
+  const chain = buildModelChain(params, agentDefs, ctx);
+  if (chain.length === 0) return { chain, source: "settings-default" };
+
+  const head = chain.find((ref) => !isModelCooling(ref)) ?? chain[0];
+  const poolBare = new Set(readConfiguredModelPool().map(bareModelRef));
+  const source: "param" | "agent" | "pool" | "session" =
+    params.model && bareModelRef(head) === bareModelRef(params.model)
+      ? "param"
+      : agentDefs?.model && bareModelRef(head) === bareModelRef(agentDefs.model)
+        ? "agent"
+        : poolBare.has(bareModelRef(head))
+          ? "pool"
+          : "session";
+  return { model: head, chain, source };
+}
+
 function isVoltaShimPath(filePath: string): boolean {
   return filePath.split(/[\\/]+/).join("/").includes("/.volta/bin/");
 }
@@ -1113,6 +1331,16 @@ export const __test__ = {
   resolveResultPresentation,
   resolveResumeLaunchBehavior,
   validateModelOverride,
+  resolveEffectiveModel,
+  assertModelAvailable,
+  parseModelPoolLines,
+  readConfiguredModelPool,
+  buildModelChain,
+  resolveEffectiveModelWithPool,
+  isModelCooling,
+  markModelFailed,
+  clearModelCooldowns,
+  bareModelRef,
   isVoltaShimPath,
   resolvePiExecutable,
   runningSubagents,
@@ -1143,15 +1371,17 @@ function startWidgetRefresh() {
  */
 async function launchSubagent(
   params: typeof SubagentParams.static,
-  ctx: { sessionManager: { getSessionFile(): string | null; getSessionId(): string; getSessionDir(): string }; cwd: string },
+  ctx: {
+    sessionManager: { getSessionFile(): string | null; getSessionId(): string; getSessionDir(): string };
+    cwd: string;
+  } & ModelResolutionContext,
   options?: { surface?: string },
 ): Promise<RunningSubagent> {
   const startTime = Date.now();
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-  validateModelOverride(params.model, agentDefs?.cli);
-  const effectiveModel = params.model ?? agentDefs?.model;
+  const { model: effectiveModel, chain: modelChain } = resolveEffectiveModelWithPool(params, agentDefs, ctx);
   const effectiveTools = params.tools ?? agentDefs?.tools;
   const effectiveSkills = params.skills ?? agentDefs?.skills;
   const effectiveThinking = agentDefs?.thinking;
@@ -1281,6 +1511,9 @@ async function launchSubagent(
       launchScriptFile,
       cli: "claude",
       sentinelFile,
+      modelChain,
+      modelAttempt: 0,
+      fallbackFrom: [],
       interactive: effectiveInteractive,
       statusState: createStatusState({
         source: "claude",
@@ -1445,6 +1678,9 @@ async function launchSubagent(
     sessionFile: subagentSessionFile,
     launchScriptFile,
     activityFile,
+    modelChain,
+    modelAttempt: 0,
+    fallbackFrom: [],
     interactive: effectiveInteractive,
     statusState: createStatusState({
       source: "pi",
@@ -1596,6 +1832,123 @@ async function watchSubagent(
   }
 }
 
+function deliverSubagentError(pi: ExtensionAPI, running: RunningSubagent, err: unknown): void {
+  updateWidget();
+  const message = err instanceof Error ? err.message : String(err);
+  pi.sendMessage(
+    {
+      customType: "subagent_result",
+      content: `Sub-agent "${running.name}" error: ${message}`,
+      display: true,
+      details: { name: running.name, task: running.task, error: message },
+    },
+    { triggerTurn: true, deliverAs: "steer" },
+  );
+}
+
+/**
+ * Watch a running subagent and deliver its result. When a run dies from a
+ * provider error (rate limit, overload) and the model chain has a next
+ * healthy candidate, relaunch the same params on that model instead of
+ * surfacing the failure — each chain entry is tried at most once per spawn.
+ * Models that fail are put in cooldown so parallel spawns skip them too.
+ */
+function superviseSubagent(
+  pi: ExtensionAPI,
+  params: typeof SubagentParams.static,
+  ctx: Parameters<typeof launchSubagent>[1],
+  running: RunningSubagent,
+): void {
+  const watcherAbort = new AbortController();
+  running.abortController = watcherAbort;
+
+  watchSubagent(running, watcherAbort.signal)
+    .then((result) => {
+      updateWidget(); // reflect removal from Map immediately
+
+      if (result.ping) {
+        // Subagent is requesting help — steer a ping message with session path for resume
+        const sessionRef = result.sessionFile
+          ? `\n\nSession: ${result.sessionFile}\nResume: pi --session ${result.sessionFile}`
+          : "";
+        pi.sendMessage(
+          {
+            customType: "subagent_ping",
+            content: `Sub-agent "${result.ping.name}" needs help (${formatElapsed(result.elapsed)}):\n\n${result.ping.message}${sessionRef}`,
+            display: true,
+            details: {
+              name: result.ping.name,
+              message: result.ping.message,
+              agent: running.agent,
+              sessionFile: result.sessionFile,
+            },
+          },
+          { triggerTurn: true, deliverAs: "steer" },
+        );
+        return;
+      }
+
+      // Provider-failure detection: the agent loop errored out (429/overload)
+      // or the child crashed before writing any session file.
+      const chain = running.modelChain ?? [];
+      const attempt = running.modelAttempt ?? 0;
+      const currentModel = chain[attempt];
+      const providerFailure =
+        running.cli !== "claude" &&
+        chain.length > 1 &&
+        result.error !== "cancelled" &&
+        (!!result.errorMessage ||
+          (result.exitCode !== 0 && !existsSync(running.sessionFile)));
+
+      if (providerFailure && currentModel) {
+        markModelFailed(currentModel);
+        let next = attempt + 1;
+        while (next < chain.length && isModelCooling(chain[next])) next++;
+        if (next < chain.length) {
+          const fallbackFrom = [...(running.fallbackFrom ?? []), currentModel];
+          launchSubagent({ ...params, model: chain[next] }, ctx)
+            .then((relaunched) => {
+              relaunched.modelChain = chain;
+              relaunched.modelAttempt = next;
+              relaunched.fallbackFrom = fallbackFrom;
+              startWidgetRefresh();
+              startStatusRefresh(pi);
+              superviseSubagent(pi, params, ctx, relaunched);
+            })
+            .catch((err) => deliverSubagentError(pi, running, err));
+          return; // failure not final yet — don't deliver
+        }
+      }
+
+      const presentation = resolveResultPresentation(result, running.name, {
+        model: currentModel,
+        fallbackFrom: running.fallbackFrom,
+      });
+
+      pi.sendMessage(
+        {
+          customType: "subagent_result",
+          content: presentation,
+          display: true,
+          details: {
+            name: running.name,
+            task: running.task,
+            agent: running.agent,
+            exitCode: result.exitCode,
+            elapsed: result.elapsed,
+            sessionFile: result.sessionFile,
+            ...(currentModel ? { model: currentModel } : {}),
+            ...(running.fallbackFrom?.length ? { fallbackFrom: running.fallbackFrom } : {}),
+            ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+            ...(result.claudeSessionId ? { claudeSessionId: result.claudeSessionId } : {}),
+          },
+        },
+        { triggerTurn: true, deliverAs: "steer" },
+      );
+    })
+    .catch((err) => deliverSubagentError(pi, running, err));
+}
+
 export default function subagentsExtension(pi: ExtensionAPI) {
   // Capture the UI context for widget updates
   pi.on("session_start", (_event, ctx) => {
@@ -1714,73 +2067,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Launch the subagent (creates pane, sends command)
         const running = await launchSubagent(params, ctx);
 
-        // Create a separate AbortController for the watcher
-        // (the tool's signal completes when we return)
-        const watcherAbort = new AbortController();
-        running.abortController = watcherAbort;
-
         // Start widget refresh and status supervision when the first agent launches
         startWidgetRefresh();
         startStatusRefresh(pi);
 
-        // Fire-and-forget: start watching in background
-        watchSubagent(running, watcherAbort.signal)
-          .then((result) => {
-            updateWidget(); // reflect removal from Map immediately
-
-            if (result.ping) {
-              // Subagent is requesting help — steer a ping message with session path for resume
-              const sessionRef = `\n\nSession: ${result.sessionFile}\nResume: pi --session ${result.sessionFile}`;
-              pi.sendMessage(
-                {
-                  customType: "subagent_ping",
-                  content: `Sub-agent "${result.ping.name}" needs help (${formatElapsed(result.elapsed)}):\n\n${result.ping.message}${sessionRef}`,
-                  display: true,
-                  details: {
-                    name: result.ping.name,
-                    message: result.ping.message,
-                    agent: running.agent,
-                    sessionFile: result.sessionFile,
-                  },
-                },
-                { triggerTurn: true, deliverAs: "steer" },
-              );
-              return;
-            }
-
-            const presentation = resolveResultPresentation(result, running.name);
-
-            pi.sendMessage(
-              {
-                customType: "subagent_result",
-                content: presentation,
-                display: true,
-                details: {
-                  name: running.name,
-                  task: running.task,
-                  agent: running.agent,
-                  exitCode: result.exitCode,
-                  elapsed: result.elapsed,
-                  sessionFile: result.sessionFile,
-                  ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
-                  ...(result.claudeSessionId ? { claudeSessionId: result.claudeSessionId } : {}),
-                },
-              },
-              { triggerTurn: true, deliverAs: "steer" },
-            );
-          })
-          .catch((err) => {
-            updateWidget();
-            pi.sendMessage(
-              {
-                customType: "subagent_result",
-                content: `Sub-agent "${running.name}" error: ${err?.message ?? String(err)}`,
-                display: true,
-                details: { name: running.name, task: running.task, error: err?.message },
-              },
-              { triggerTurn: true, deliverAs: "steer" },
-            );
-          });
+        // Fire-and-forget: watch in background (auto model-pool fallback on
+        // provider errors); the result is steered back when the run finishes.
+        superviseSubagent(pi, params, ctx, running);
 
         // Return immediately
         return {
@@ -1956,12 +2249,20 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
         const modelBlock =
           models.length > 0
-            ? `\n\nAvailable models (use as \`model\` override):\n${models.map((m) => `• ${m}`).join("\n")}`
+            ? `\n\nAvailable models (use as \`model\` override; without an explicit model, subagents use the configured model pool, then the parent session's current model):\n${models.map((m) => `• ${m}`).join("\n")}`
+            : "";
+
+        const pool = readConfiguredModelPool();
+        const poolBlock =
+          pool.length > 0
+            ? `\n\nSubagent model pool (spawn preference order; provider failures fall through automatically):\n${pool
+                .map((m) => `• ${m}${isModelCooling(m) ? " (cooldown)" : ""}`)
+                .join("\n")}`
             : "";
 
         return {
-          content: [{ type: "text", text: lines.join("\n") + modelBlock }],
-          details: { agents: list, models },
+          content: [{ type: "text", text: lines.join("\n") + modelBlock + poolBlock }],
+          details: { agents: list, models, modelPool: pool },
         };
       },
 
@@ -2316,8 +2617,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             ? `failed (exit ${exitCode})`
             : "completed";
         const agentTag = details.agent ? theme.fg("dim", ` (${details.agent})`) : "";
+        const modelTag = details.model
+          ? theme.fg("dim", ` [${bareModelRef(String(details.model)).split("/").pop() ?? ""}]`)
+          : "";
+        const fallbackTag =
+          Array.isArray(details.fallbackFrom) && details.fallbackFrom.length > 0
+            ? theme.fg("dim", " — model fallback")
+            : "";
 
-        const header = `${icon} ${theme.fg("toolTitle", theme.bold(name))}${agentTag} ${theme.fg("dim", "—")} ${status} ${theme.fg("dim", `(${elapsed})`)}`;
+        const header = `${icon} ${theme.fg("toolTitle", theme.bold(name))}${agentTag}${modelTag} ${theme.fg("dim", "—")} ${status}${fallbackTag} ${theme.fg("dim", `(${elapsed})`)}`;
         const rawContent = typeof message.content === "string" ? message.content : "";
 
         // Clean summary (remove session ref and leading label for display)

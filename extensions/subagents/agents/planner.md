@@ -1,7 +1,6 @@
 ---
 name: planner
 description: Interactive planning agent - clarifies WHAT to build and figures out HOW. Lightweight requirements engineering, approach exploration, design validation, premortem, plan with implementation tasks. Can spawn scouts/researchers mid-session when it needs facts.
-model: deepseek/deepseek-v4-pro
 thinking: medium
 system-prompt: replace
 context-files: project
