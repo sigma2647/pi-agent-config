@@ -1,5 +1,5 @@
 ---
-description: 第一性原理、跨领域借解，小型专家团
+description: 组一个真正互补的小型专家团，让他们互相质疑
 argument-hint: "<专家会诊>"
 ---
 我的问题是：$@

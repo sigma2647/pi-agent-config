@@ -1,5 +1,5 @@
 ---
-description: 
+description: 基于斯坦福人生设计方法，规划未来人生
 argument-hint: "<人生设计师>"
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: 
+description: 从其他领域借用相通的解法，扩散视角
 argument-hint: "<跨领域借解>"
 ---
 我的困惑是：【说明背景、当前做法、现实约束和具体卡点】。

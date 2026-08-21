@@ -1,5 +1,5 @@
 ---
-description: 
+description: 已有两个选项、纠结选哪个时，用双向钢人论证做决策
 argument-hint: "<双向钢人论证>"
 ---
 

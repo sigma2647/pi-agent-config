@@ -1,5 +1,5 @@
 ---
-description: 
+description: 深度对话挖掘被忽视或压抑的天赋
 argument-hint: "<挖掘隐藏天赋>"
 ---
 

@@ -1,5 +1,5 @@
 ---
-description:【填写你的选择或想法】
+description: 用最小实验替代空想，让现实反馈帮你决策
 argument-hint: "<用最小实验替代空想>"
 ---
 我正在纠结的是：$@。
