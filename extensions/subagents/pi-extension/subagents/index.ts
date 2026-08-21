@@ -86,6 +86,25 @@ function getModuleAbortSignal(): AbortSignal {
   return ((globalThis as any)[POLL_ABORT_KEY] as AbortController).signal;
 }
 
+/**
+ * List the models actually available to this session as canonical
+ * `provider/model` references (e.g. "deepseek/deepseek-v4-flash").
+ *
+ * Reads the in-process ModelRegistry from the extension context — no subprocess,
+ * no `pi --list-models` shell-out. Spawning `pi` here would be re-entrant: this
+ * extension is loaded by `pi`, so a child `pi` would load it again and recurse.
+ */
+function listAvailableModelRefs(
+  ctx: { modelRegistry?: { getAvailable(): Array<{ provider: string; id: string }> } },
+): string[] {
+  try {
+    const models = ctx.modelRegistry?.getAvailable() ?? [];
+    return models.map((m) => `${m.provider}/${m.id}`).sort();
+  } catch {
+    return [];
+  }
+}
+
 const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name for the subagent" }),
   task: Type.String({ description: "Task/prompt for the sub-agent" }),
@@ -101,7 +120,9 @@ const SubagentParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Model override. For Pi agents, use an exact provider/model from `pi --list-models`; omit to use the agent default. Bare aliases are only supported for Claude CLI agents.",
+        "Model override as an exact provider/model reference (format: provider/model-id). " +
+        "Omit to use the agent default. Call subagents_list to see the models available in this session. " +
+        "Bare aliases are only supported for Claude CLI agents.",
     }),
   ),
   skills: Type.Optional(
@@ -1011,8 +1032,8 @@ function validateModelOverride(model: string | undefined, cli: string | undefine
   const slash = model.indexOf("/");
   if (slash <= 0 || slash === model.length - 1) {
     throw new Error(
-      `Model override "${model}" must use an exact provider/model reference from \`pi --list-models\` ` +
-        `(for example, "deepseek/deepseek-v4-flash"). Omit model to use the agent default.`,
+      `Model override "${model}" must use an exact provider/model reference (format: provider/model-id) ` +
+        `as listed by subagents_list or \`pi --list-models\`. Omit model to use the agent default.`,
     );
   }
 }
@@ -1663,6 +1684,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           };
         }
 
+        // Reject an unknown agent name instead of silently launching a generic
+        // subagent without the intended role, model, tools, or skills.
+        if (params.agent && !loadAgentDefaults(params.agent)) {
+          const text = `Agent "${params.agent}" not found. ${formatAvailableAgents()}`;
+          return {
+            content: [{ type: "text", text }],
+            details: { error: "unknown agent", agent: params.agent },
+          };
+        }
+
         // Validate prerequisites
         if (!isMuxAvailable()) {
           return muxUnavailableResult();
@@ -1842,8 +1873,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         "and does not emit a subagent_result solely because of this request.",
       promptSnippet: "Interrupt a Pi-backed subagent's active turn without closing its session.",
       parameters: Type.Object({
-        id: Type.Optional(Type.String({ description: "Exact running subagent id" })),
-        name: Type.Optional(Type.String({ description: "Exact running subagent display name" })),
+        id: Type.Optional(
+          Type.String({
+            description: "Exact running subagent id. Provide either id or name (id wins if both are set).",
+          }),
+        ),
+        name: Type.Optional(
+          Type.String({
+            description: "Exact running subagent display name. Provide either id or name.",
+          }),
+        ),
       }),
 
       async execute(_toolCallId, params) {
@@ -1886,19 +1925,24 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagents_list",
       label: "List Subagents",
       description:
-        "List all available subagent definitions. " +
+        "List all available subagent definitions and the models available in this session. " +
         "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
-        "Project-local agents override global ones with the same name.",
-      promptSnippet: "List available package, global, and project subagent definitions.",
+        "Project-local agents override global ones with the same name. " +
+        "Use a listed provider/model reference as the `subagent` tool's `model` override.",
+      promptSnippet: "List available package, global, and project subagent definitions plus available models.",
       parameters: Type.Object({}),
 
-      async execute() {
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
         const list = discoverAgentDefinitions().filter((agent) => !agent.disableModelInvocation);
+        const models = listAvailableModelRefs(ctx);
 
         if (list.length === 0) {
+          const emptyText =
+            "No subagent definitions found." +
+            (models.length > 0 ? `\n\nAvailable models:\n${models.map((m) => `• ${m}`).join("\n")}` : "");
           return {
-            content: [{ type: "text", text: "No subagent definitions found." }],
-            details: { agents: [] },
+            content: [{ type: "text", text: emptyText }],
+            details: { agents: [], models },
           };
         }
 
@@ -1910,17 +1954,28 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           return `• ${a.name}${badge}${model}${policy}${desc}`;
         });
 
+        const modelBlock =
+          models.length > 0
+            ? `\n\nAvailable models (use as \`model\` override):\n${models.map((m) => `• ${m}`).join("\n")}`
+            : "";
+
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: { agents: list },
+          content: [{ type: "text", text: lines.join("\n") + modelBlock }],
+          details: { agents: list, models },
         };
       },
 
       renderResult(result, _opts, theme) {
         const details = result.details as any;
         const agents = details?.agents ?? [];
+        const models: string[] = details?.models ?? [];
+        const modelLines =
+          models.length > 0
+            ? "\n" +
+              theme.fg("dim", `  models: ${models.join(", ")}`)
+            : "";
         if (agents.length === 0) {
-          return new Text(theme.fg("dim", "No subagent definitions found."), 0, 0);
+          return new Text(theme.fg("dim", "No subagent definitions found.") + modelLines, 0, 0);
         }
         const lines = agents.map((a: any) => {
           const badge = a.source === "project" ? theme.fg("accent", " (project)") : "";
@@ -1929,7 +1984,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const policy = theme.fg("dim", ` {${formatAgentPromptPolicy(a)}}`);
           return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${policy}${desc}`;
         });
-        return new Text(lines.join("\n"), 0, 0);
+        return new Text(lines.join("\n") + modelLines, 0, 0);
       },
     });
 
