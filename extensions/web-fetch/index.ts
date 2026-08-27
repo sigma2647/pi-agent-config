@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { fetchAndExtract, TRUNCATION_THRESHOLD } from "./core.ts";
 import { storeContent, getContent, pruneContent } from "./storage.ts";
 
