@@ -20,9 +20,11 @@ export function pathToUri(filePath: string): string {
   if (filePath.startsWith("file://")) return filePath;
   const resolved = path.resolve(filePath);
   if (process.platform === "win32") {
-    return "file:///" + resolved.replace(/\\/g, "/");
+    return new URL(`file:///${resolved.replace(/\\/g, "/")}`).href;
   }
-  return "file://" + resolved;
+  // URL percent-encodes non-ASCII chars (e.g. Chinese dir names);
+  // a raw unencoded path is an invalid file URI and hangs pyright.
+  return new URL(`file://${resolved}`).href;
 }
 
 export function uriToPath(uri: string): string {
@@ -182,12 +184,14 @@ export class LspClient {
   }
 
   async initialize(): Promise<unknown> {
-    const result = await this.request("initialize", {
-      processId: process.pid,
-      rootUri: pathToUri(this.cwd),
-      workspaceFolders: [
-        { uri: pathToUri(this.cwd), name: path.basename(this.cwd) },
-      ],
+    const result = await this.request(
+      "initialize",
+      {
+        processId: process.pid,
+        rootUri: pathToUri(this.cwd),
+        workspaceFolders: [
+          { uri: pathToUri(this.cwd), name: path.basename(this.cwd) },
+        ],
       capabilities: {
         textDocument: {
           hover: { dynamicRegistration: false },
@@ -212,7 +216,9 @@ export class LspClient {
           workspaceFolders: true,
         },
       },
-    });
+      },
+      10000,
+    );
     this.ready = true;
     this.notify("initialized", {});
     return result;
@@ -254,13 +260,26 @@ export class LspClient {
     }
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, timeoutMs = 30000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       const msg: LspRequest = { jsonrpc: "2.0", id, method, params };
       const payload = JSON.stringify(msg);
       const data = `Content-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`LSP request "${method}" timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       this.proc.stdin?.write(data);
     });
   }
