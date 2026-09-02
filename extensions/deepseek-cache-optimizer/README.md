@@ -18,13 +18,13 @@ DeepSeek 的缓存是自动的：请求前缀从第 0 字节起与之前完全�
 
 ## Subagent 兼容
 
-pi-interactive-subagents 等方案 spawn 的子代理是**独立的 pi 进程**（`pi --session <file> -e ...`），它们读同一份全局 `~/.pi/agent/settings.json` 和全局扩展目录。本扩展经 `settings.json` 的 packages 链（`pi-agent-config` → `+extensions/index.ts`）加载后，**子代理进程自动继承**，无需修改 subagents 扩展本身。
+pi-interactive-subagents 等方案 spawn 的子代理是**独立的 pi 进程**（`pi --session <file> -e ...`），它们读同一份全局 `~/.pi/agent/settings.json` 和全局扩展目录。本扩展经 `settings.json` 的 packages 链（`pi-agent-config` → `+extensions/deepseek-cache-optimizer/index.ts`）加载后，**子代理进程自动继承**，无需修改 subagents 扩展本身。
 
 子代理会话内同样获得三项优化：CWD 前缀稳定（`--append-system-prompt` 追加的 agent body 固定，system prompt 仍静态）、压缩前缀复用、命中率遥测。
 
 ## 安装与验证
 
-扩展位于 `extensions/deepseek-cache-optimizer/`，已挂到 `extensions/index.ts`（随 pi-agent-config 包加载）。改完在 pi 内 `/reload`：
+扩展位于 `extensions/deepseek-cache-optimizer/`，直接作为 `pi.extensions` 入口加载。改完在 pi 内 `/reload`：
 
 1. 正常对话几轮，看 footer 的 `CH:XX.X%`（每轮命中率）。
 2. 输入 `/cache-stats` 看累计命中率。

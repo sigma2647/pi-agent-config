@@ -9,10 +9,10 @@ dotfiles because they are executable code assets.
 - `extensions/web-fetch/` — URL extraction and Markdown conversion (`pi-wf`).
 - `extensions/web-search/` — general web search with fallback backends (`pi-ws`).
 - `extensions/subagents/` — asynchronous visible-pane subagent delegation.
-- `extensions/index.ts` — shared LSP extension.
+- `extensions/deepseek-cache-optimizer/` — DeepSeek prefix-cache hit optimization.
 
 Directory-based extensions own their runtime files, package manifest, and
-tests; the shared LSP entry remains `extensions/index.ts`. Historical or
+tests. Historical or
 upstream comparison material lives under `old/` and is never loaded.
 
 See [AGENTS.md](AGENTS.md) for conventions and [DEPLOY.md](DEPLOY.md) for a
