@@ -107,10 +107,14 @@ cmd_install() {
 exec node --experimental-strip-types --no-warnings "$abs" "\$@"
 WRAPPER
 			chmod +x "$BIN_DIR/$name"
-			# .cmd wrapper for PowerShell / CMD
+			# .cmd wrapper for PowerShell / CMD — must be a Windows path,
+			# not the MSYS /c/... form (node would resolve C:\c\...).
+			local winabs
+			winabs="$(cygpath -w "$abs" 2>/dev/null || true)"
+			[[ -n "$winabs" ]] || winabs="$abs"
 			cat > "$BIN_DIR/$name.cmd" <<CMDWRAP
 @echo off
-node --experimental-strip-types --no-warnings "$abs" %*
+node --experimental-strip-types --no-warnings "$winabs" %*
 CMDWRAP
 			printf "  ${G}wrote${N}  %-18s + .cmd -> %s\n" "$name" "$abs"
 		else
