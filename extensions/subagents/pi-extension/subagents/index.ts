@@ -213,7 +213,7 @@ const SubagentParams = Type.Object({
   agent: Type.Optional(
     Type.String({
       description:
-        "Agent name to load defaults from (e.g. 'worker', 'scout', 'reviewer'). Reads ~/.pi/agent/agents/<name>.md for model, tools, skills.",
+        "Agent name to load defaults from (e.g. 'worker', 'scout', 'reviewer').",
     }),
   ),
   systemPrompt: Type.Optional(
@@ -222,11 +222,7 @@ const SubagentParams = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "Model override as an exact provider/model reference (format: provider/model-id). " +
-        "Resolution: this param → agent frontmatter `model` → the configured subagent model pool → the parent session's current model. " +
-        "On provider errors (e.g. 429) the run automatically falls through the remaining pool; subagents_list shows the pool. " +
-        "Call subagents_list to see the models available in this session; unavailable references are rejected. " +
-        "Bare aliases are only supported for Claude CLI agents.",
+        "Model override as provider/model-id. Falls back to the agent frontmatter `model` → the subagent model pool → the parent session's current model; on provider error the run falls through the pool. Call subagents_list to see available models.",
     }),
   ),
   skills: Type.Optional(
@@ -238,25 +234,25 @@ const SubagentParams = Type.Object({
   cwd: Type.Optional(
     Type.String({
       description:
-        "Working directory for the sub-agent. Local config, skills, and extensions are discovered there; the agent's context-files policy controls AGENTS.md/CLAUDE.md loading.",
+        "Working directory for the sub-agent (discovers local config, skills, extensions there).",
     }),
   ),
   fork: Type.Optional(
     Type.Boolean({
       description:
-        "Force the full-context fork mode for this spawn. The sub-agent inherits the current session conversation, overriding any agent frontmatter session-mode.",
+        "Force full-context fork mode (sub-agent inherits the current session conversation).",
     }),
   ),
   interactive: Type.Optional(
     Type.Boolean({
       description:
-        "Mark the subagent as interactive (long-running, user drives the conversation in its own pane). When true, the main session is not woken by status transitions (stalled/recovered) for this subagent. If omitted, falls back to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit` (agents that auto-exit are autonomous and get stall pings; agents that don't are interactive and stay quiet).",
+        "Mark as interactive (long-running, user drives its pane). If omitted, falls back to the agent's `interactive` frontmatter.",
     }),
   ),
   resumeSessionId: Type.Optional(
     Type.String({
       description:
-        "Resume a previous Claude Code session by its ID. Loads the conversation history and continues where it left off. The session ID is returned in details of every claude tool call. Use this to retry cancelled runs or ask follow-up questions.",
+        "Resume a previous Claude CLI session by its ID (from the session ID in claude tool call details).",
     }),
   ),
 });
@@ -2403,11 +2399,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagents_list",
       label: "List Subagents",
       description:
-        "List all available subagent definitions and the models available in this session. " +
-        "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/. " +
-        "Project-local agents override global ones with the same name. " +
-        "Use a listed provider/model reference as the `subagent` tool's `model` override.",
-      promptSnippet: "List available package, global, and project subagent definitions plus available models.",
+        "List available subagent definitions and models in this session. " +
+        "Scans project-local .pi/agents/ and global ~/.pi/agent/agents/ (project overrides global on name clash). " +
+        "Use a listed provider/model ref as the `subagent` tool's `model` override.",
+      promptSnippet: "List available subagent definitions plus available models.",
       parameters: Type.Object({}),
 
       async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {

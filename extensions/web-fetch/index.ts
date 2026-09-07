@@ -15,17 +15,15 @@ export default function (pi: ExtensionAPI) {
 		name: "web_fetch",
 		label: "Web Fetch",
 		description:
-			"Fetch a single URL and return the full page as clean markdown — the right tool whenever you need to READ a page (docs, blog post, GitHub issue, PDF, API reference, news article, RFC). " +
+			"Fetch a single URL and return the page as clean markdown (docs, blog, GitHub issue/PR, PDF, API ref, news, RFC). " +
 			"Pairs with web_search: search finds URLs, fetch reads them. " +
-			"Handles HTML (Readability/Defuddle), PDFs, plain text, and JS-rendered pages via Jina/browser-probe/Playwright fallback.",
+			"Handles HTML (Readability/Defuddle), PDF, text, and JS-rendered pages via fallback.",
 		promptSnippet:
 			"Fetch a URL and extract its readable content as markdown.",
 		promptGuidelines: [
-			"Use web_fetch whenever you need the actual content of a known URL, including URLs returned by web_search.",
-			"Default to web_fetch over web_search when the user names a specific resource or gives a URL (e.g. 'check the React docs', 'read this RFC', 'open this PR', 'look at <url>').",
-			"After web_search returns useful-looking results, follow up with web_fetch on the top URL(s) instead of answering from snippets — snippets are previews, not source.",
-			"GitHub commits / releases / repo activity → `gh api <endpoint>` (authenticated, 5000/hr), not web_fetch. web_fetch is for PR/issue/file content.",
-			"When web_fetch returns truncated content (>30 KB), the truncated output includes a retrieveId. Use web_fetch({ retrieve: \"<id>\" }) to get the full document without re-fetching.",
+			"Use web_fetch to READ a known URL (incl. results from web_search); snippets are previews, not source.",
+			"GitHub commits/releases/activity use `gh api`, not web_fetch; web_fetch is for PR/issue/file content.",
+			"Truncated (>30 KB) output carries a retrieveId: call web_fetch({ retrieve: \"<id>\" }) to get the full document.",
 		],
 
 		parameters: Type.Object({
