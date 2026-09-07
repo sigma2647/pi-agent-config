@@ -59,6 +59,7 @@ import subagentDoneExtension, {
   findLatestAssistantError,
 } from "../pi-extension/subagents/subagent-done.ts";
 import { __pollForExitTest__ } from "../pi-extension/subagents/cmux.ts";
+import { isTerminalProviderLimitError } from "../pi-extension/subagents/provider-errors.ts";
 
 // --- Helpers ---
 
@@ -1698,6 +1699,50 @@ describe("cmux.ts interpretExitSidecar", () => {
   it("treats unknown payload shapes as done", () => {
     assert.deepEqual(interpretExitSidecar({}), { reason: "done", exitCode: 0 });
     assert.deepEqual(interpretExitSidecar(null), { reason: "done", exitCode: 0 });
+  });
+});
+describe("provider-errors.ts isTerminalProviderLimitError", () => {
+  it("flags Anthropic/Claude credit-exhaustion surfaced as a 429 rate limit", () => {
+    const msg =
+      '429 {"type":"error","error":{"type":"rate_limit_error",' +
+      '"message":"This request would exceed your account\'s rate limit. Please try again later."}}';
+    assert.equal(isTerminalProviderLimitError(msg), true);
+    assert.equal(
+      isTerminalProviderLimitError("This request would exceed your account's rate limit."),
+      true,
+    );
+  });
+
+  it("flags Anthropic credit/spend-cap phrasings", () => {
+    assert.equal(isTerminalProviderLimitError("Credit balance is too low"), true);
+    assert.equal(isTerminalProviderLimitError("spend limit reached (daily; resets tomorrow)"), true);
+    assert.equal(isTerminalProviderLimitError("spend limit unavailable"), true);
+    assert.equal(isTerminalProviderLimitError("Usage credits required for 1M context"), true);
+    assert.equal(isTerminalProviderLimitError("insufficient credits"), true);
+  });
+
+  it("flags OpenAI/DeepSeek quota-and-billing phrasings", () => {
+    assert.equal(isTerminalProviderLimitError("Insufficient Quota"), true);
+    assert.equal(isTerminalProviderLimitError("You exceeded your current quota"), true);
+    assert.equal(isTerminalProviderLimitError("out of budget"), true);
+    assert.equal(isTerminalProviderLimitError("available balance"), true);
+    assert.equal(isTerminalProviderLimitError("quota exceeded"), true);
+    assert.equal(isTerminalProviderLimitError("Monthly usage limit reached"), true);
+  });
+
+  it("does not flag transient overloads, server errors, or generic rate limits", () => {
+    assert.equal(isTerminalProviderLimitError("Anthropic 529 Overloaded"), false);
+    assert.equal(isTerminalProviderLimitError("APIError: 500 internal server error"), false);
+    assert.equal(
+      isTerminalProviderLimitError("too many requests, retry in 20s"),
+      false,
+    );
+  });
+
+  it("handles empty / undefined / non-string text", () => {
+    assert.equal(isTerminalProviderLimitError(""), false);
+    assert.equal(isTerminalProviderLimitError(undefined), false);
+    assert.equal(isTerminalProviderLimitError(null), false);
   });
 });
 describe("commands", () => {

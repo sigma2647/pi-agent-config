@@ -35,6 +35,7 @@ import {
   getNewEntries,
   seedSubagentSessionFile,
 } from "./session.ts";
+import { isTerminalProviderLimitError } from "./provider-errors.ts";
 import {
   type StatusSnapshot,
   type SubagentStatusState,
@@ -702,6 +703,20 @@ function resolveResultPresentation(
     // produce a usable result — surface the underlying provider/network
     // failure so the orchestrator can decide whether to retry, resume, or
     // change approach instead of silently treating the run as completed.
+    if (isTerminalProviderLimitError(result.errorMessage)) {
+      // An account/plan quota, credit, or spend cap is exhausted. Retrying or
+      // falling through to another model on the same account will not help, so
+      // say so explicitly and stop the run rather than hinting at a retry.
+      return (
+        `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
+        `(account quota / credits exhausted).\n\n` +
+        `Error: ${result.errorMessage}${exhaustedNote}\n\n` +
+        `This looks like an exhausted account — not a transient overload. ` +
+        `Retrying on the same provider/account will keep failing. Top up the ` +
+        `account or raise the spend cap first, or point the subagent at a ` +
+        `different provider/account.${sessionRef}`
+      );
+    }
     return (
       `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
       `(provider/agent error — auto-retry exhausted).\n\n` +
@@ -2062,7 +2077,15 @@ function superviseSubagent(
         (!!result.errorMessage ||
           (result.exitCode !== 0 && !existsSync(running.sessionFile)));
 
-      if (providerFailure && currentModel) {
+      // Terminal account/quota/credit exhaustion: falling through the model
+      // pool only retries on another model of the same (exhausted) account, so
+      // skip the fallback and fail the run immediately with a clear message.
+      const terminalFailure =
+        result.error !== "cancelled" &&
+        !!result.errorMessage &&
+        isTerminalProviderLimitError(result.errorMessage);
+
+      if (providerFailure && currentModel && !terminalFailure) {
         markModelFailed(currentModel);
         let next = attempt + 1;
         while (next < chain.length && isModelCooling(chain[next])) next++;
