@@ -105,6 +105,107 @@ function listAvailableModelRefs(
   }
 }
 
+/** Thinking levels Pi accepts as the `:<level>` suffix on a `--model` ref. */
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
+/** Per-model metadata the registry may expose; minimal `{provider, id}` shapes stay valid. */
+interface AvailableModelInfo {
+  provider: string;
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+}
+
+/**
+ * Split a canonical `provider/model[:thinking]` ref into its parts.
+ *
+ * Mirrors Pi's `parseModelPattern`: only the LAST colon, and only when the
+ * suffix is a valid thinking level, is treated as a thinking suffix — model
+ * ids that themselves contain colons (e.g. OpenRouter `org/model:exacto`) stay
+ * intact. Note this is a heuristic (it lacks the model list for Pi's
+ * exact-match-first pass), so a model id whose last colon segment happens to
+ * spell a thinking level would be misread; that does not occur for the
+ * `provider/model[:thinking]` refs this extension produces.
+ */
+function splitModelRef(
+  ref: string,
+): { provider: string; id: string; thinking: string | undefined } {
+  const slash = ref.indexOf("/");
+  const provider = slash > 0 ? ref.slice(0, slash) : "";
+  const rest = slash > 0 ? ref.slice(slash + 1) : ref;
+  const colon = rest.lastIndexOf(":");
+  if (colon > 0 && THINKING_LEVELS.has(rest.slice(colon + 1))) {
+    return { provider, id: rest.slice(0, colon), thinking: rest.slice(colon + 1) };
+  }
+  return { provider, id: rest, thinking: undefined };
+}
+
+/**
+ * Find one available model by exact provider/id, preferring the registry's
+ * `find` lookup and falling back to a `getAvailable()` scan for minimal
+ * registry shims (and tests). Never throws — absence reads as "not found".
+ */
+function findAvailableModel(
+  ctx: ModelResolutionContext,
+  provider: string,
+  id: string,
+): AvailableModelInfo | undefined {
+  const registry = ctx.modelRegistry as
+    | {
+        find?(provider: string, id: string): AvailableModelInfo | undefined;
+        getAvailable(): AvailableModelInfo[];
+      }
+    | undefined;
+  if (!registry) return undefined;
+  try {
+    if (typeof registry.find === "function") return registry.find(provider, id);
+    return registry.getAvailable().find((m) => m.provider === provider && m.id === id);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The full available-model list (with display metadata) for discovery output.
+ * Kept separate from `listAvailableModelRefs`, which is the membership-only
+ * view the pool chain uses.
+ */
+function listAvailableModelDetails(ctx: ModelResolutionContext): AvailableModelInfo[] {
+  try {
+    return (ctx.modelRegistry?.getAvailable() ?? []) as AvailableModelInfo[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Render the layered model catalog for discovery: one line per provider/model
+ * with display name, reasoning support, and context window when the registry
+ * exposes them — closer to DSH's `list_subagent_models` than the flat ref list.
+ */
+function formatAvailableModelsDetail(ctx: ModelResolutionContext): string {
+  const details = listAvailableModelDetails(ctx);
+  if (details.length === 0) return "";
+  const byProvider = new Map<string, AvailableModelInfo[]>();
+  for (const m of details) {
+    const list = byProvider.get(m.provider) ?? [];
+    list.push(m);
+    byProvider.set(m.provider, list);
+  }
+  const lines: string[] = [];
+  const providers = [...byProvider.keys()].sort((a, b) => a.localeCompare(b));
+  for (const provider of providers) {
+    for (const m of byProvider.get(provider)!.sort((a, b) => a.id.localeCompare(b.id))) {
+      const name = m.name ? ` — ${m.name}` : "";
+      const reasoning = m.reasoning === true ? " [reasoning]" : m.reasoning === false ? " [no reasoning]" : "";
+      const ctxWin = m.contextWindow != null ? ` [${Math.round(m.contextWindow / 1000)}k ctx]` : "";
+      lines.push(`• ${provider}/${m.id}${name}${reasoning}${ctxWin}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name for the subagent" }),
   task: Type.String({ description: "Task/prompt for the sub-agent" }),
@@ -1062,23 +1163,35 @@ function validateModelOverride(model: string | undefined, cli: string | undefine
 /** Context slice needed for model resolution: the parent session's current model and the registry. */
 interface ModelResolutionContext {
   model?: { provider: string; id: string } | undefined;
-  modelRegistry?: { getAvailable(): Array<{ provider: string; id: string }> } | undefined;
+  modelRegistry?: {
+    getAvailable(): Array<{ provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number }>;
+    find?(provider: string, id: string): { provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number } | undefined;
+  } | undefined;
 }
 
 /**
  * Fail fast when an explicit model override (tool param or agent frontmatter)
- * is not available in this session. A stale hardcoded model would otherwise
- * crash the child pi at startup with an opaque error inside its pane.
+ * is not available in this session, and preflight the requested thinking level
+ * against the model's reasoning support. A stale hardcoded model (or a
+ * `:thinking` level the target model cannot honor) would otherwise crash the
+ * child pi at startup with an opaque error inside its pane.
  */
 function assertModelAvailable(model: string, ctx: ModelResolutionContext): void {
   const available = listAvailableModelRefs(ctx);
   if (available.length === 0) return; // registry unavailable — do not block the launch
-  const bare = model.split(":")[0];
-  if (!available.includes(bare)) {
+  const { provider, id, thinking } = splitModelRef(model);
+  const found = findAvailableModel(ctx, provider, id);
+  if (!found) {
     throw new Error(
       `Model "${model}" is not available in this session. Available models:\n` +
         `${available.map((m) => `• ${m}`).join("\n")}\n` +
         `Pick one from this list, or drop the override / the agent's "model" frontmatter to inherit the parent session's model.`,
+    );
+  }
+  if (thinking && found.reasoning === false) {
+    throw new Error(
+      `Model "${model}" requests thinking level "${thinking}" but "${provider}/${id}" does not support reasoning. ` +
+        `Drop the ":${thinking}" suffix or pick a reasoning-capable model.`,
     );
   }
 }
@@ -1124,9 +1237,14 @@ function resolveEffectiveModel(
 const SUBAGENT_MODEL_POOL_FILENAME = "subagent-models.txt";
 const DEFAULT_MODEL_COOLDOWN_MS = 10 * 60_000;
 
-/** Strip a `:thinking` suffix from a model reference. */
+/**
+ * Strip a `:thinking` suffix from a model reference, leaving the canonical
+ * `provider/model` ref. Uses Pi's own parsing rule (last colon + valid level)
+ * so model ids that contain colons are not mangled.
+ */
 function bareModelRef(ref: string): string {
-  return ref.split(":")[0];
+  const { provider, id } = splitModelRef(ref);
+  return provider ? `${provider}/${id}` : id;
 }
 
 /** Parse subagent-models.txt content into an ordered list of model refs. */
@@ -1233,7 +1351,7 @@ function resolveEffectiveModelWithPool(
   params: { model?: string },
   agentDefs: AgentDefaults | null,
   ctx: ModelResolutionContext,
-): { model?: string; chain: string[]; source: "param" | "agent" | "pool" | "session" | "settings-default" } {
+): { model?: string; chain: string[]; attempt: number; source: "param" | "agent" | "pool" | "session" | "settings-default" } {
   const explicit = params.model ?? agentDefs?.model;
   if (explicit) {
     validateModelOverride(explicit, agentDefs?.cli);
@@ -1241,9 +1359,14 @@ function resolveEffectiveModelWithPool(
   }
 
   const chain = buildModelChain(params, agentDefs, ctx);
-  if (chain.length === 0) return { chain, source: "settings-default" };
+  if (chain.length === 0) return { chain, attempt: 0, source: "settings-default" };
 
-  const head = chain.find((ref) => !isModelCooling(ref)) ?? chain[0];
+  // The launch head is the first non-cooldown entry. `attempt` is its index in
+  // `chain` so the result reports the model that ACTUALLY ran — not chain[0]
+  // when earlier entries were skipped because they were still cooling down.
+  const headIndex = chain.findIndex((ref) => !isModelCooling(ref));
+  const attempt = headIndex === -1 ? 0 : headIndex;
+  const head = chain[attempt];
   const poolBare = new Set(readConfiguredModelPool().map(bareModelRef));
   const source: "param" | "agent" | "pool" | "session" =
     params.model && bareModelRef(head) === bareModelRef(params.model)
@@ -1253,7 +1376,37 @@ function resolveEffectiveModelWithPool(
         : poolBare.has(bareModelRef(head))
           ? "pool"
           : "session";
-  return { model: head, chain, source };
+  return { model: head, chain, attempt, source };
+}
+
+/**
+ * Resolve the thinking suffix to apply to the effective model at spawn.
+ *
+ * Mirrors DSH's "changing the route without naming an effort clears the
+ * inherited effort": the agent frontmatter `thinking` is declared for the
+ * agent's OWN pinned model (`params.model` or `agentDefs.model`). When the
+ * effective model moves off that pinned route (a model-pool or parent-session
+ * fallback), the declared thinking level must not ride along — the fallback
+ * model resolves its own default. An explicit `:thinking` on the effective ref
+ * always wins.
+ */
+function resolveEffectiveThinking(
+  effectiveModel: string | undefined,
+  agentDefs: AgentDefaults | null,
+  params: { model?: string },
+): string | undefined {
+  if (!effectiveModel) return undefined;
+
+  // Explicit `:thinking` on the effective ref wins over the agent frontmatter.
+  const refThinking = splitModelRef(effectiveModel).thinking;
+  if (refThinking) return refThinking;
+
+  const declared = params.model ?? agentDefs?.model;
+  const agentThinking = agentDefs?.thinking;
+  if (!agentThinking || !declared) return undefined;
+
+  // Route unchanged → keep the declared effort; route changed → clear it.
+  return bareModelRef(declared) === bareModelRef(effectiveModel) ? agentThinking : undefined;
 }
 
 function isVoltaShimPath(filePath: string): boolean {
@@ -1332,15 +1485,20 @@ export const __test__ = {
   resolveResumeLaunchBehavior,
   validateModelOverride,
   resolveEffectiveModel,
+  resolveEffectiveModelWithPool,
+  resolveEffectiveThinking,
   assertModelAvailable,
   parseModelPoolLines,
   readConfiguredModelPool,
   buildModelChain,
-  resolveEffectiveModelWithPool,
   isModelCooling,
   markModelFailed,
   clearModelCooldowns,
   bareModelRef,
+  splitModelRef,
+  findAvailableModel,
+  listAvailableModelDetails,
+  formatAvailableModelsDetail,
   isVoltaShimPath,
   resolvePiExecutable,
   runningSubagents,
@@ -1381,10 +1539,14 @@ async function launchSubagent(
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-  const { model: effectiveModel, chain: modelChain } = resolveEffectiveModelWithPool(params, agentDefs, ctx);
+  const { model: effectiveModel, chain: modelChain, attempt: modelAttempt } = resolveEffectiveModelWithPool(params, agentDefs, ctx);
   const effectiveTools = params.tools ?? agentDefs?.tools;
   const effectiveSkills = params.skills ?? agentDefs?.skills;
-  const effectiveThinking = agentDefs?.thinking;
+  // DSH-style "route change clears inherited effort": the agent's `thinking`
+  // frontmatter only rides along when the effective model is still the model
+  // it was declared for — a model-pool / parent-session fallback resolves its
+  // own default instead of inheriting a possibly-unsupported thinking level.
+  const effectiveThinking = resolveEffectiveThinking(effectiveModel, agentDefs, params);
   const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
 
   const sessionFile = ctx.sessionManager.getSessionFile();
@@ -1512,7 +1674,7 @@ async function launchSubagent(
       cli: "claude",
       sentinelFile,
       modelChain,
-      modelAttempt: 0,
+      modelAttempt,
       fallbackFrom: [],
       interactive: effectiveInteractive,
       statusState: createStatusState({
@@ -1679,7 +1841,7 @@ async function launchSubagent(
     launchScriptFile,
     activityFile,
     modelChain,
-    modelAttempt: 0,
+    modelAttempt,
     fallbackFrom: [],
     interactive: effectiveInteractive,
     statusState: createStatusState({
@@ -2247,9 +2409,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           return `• ${a.name}${badge}${model}${policy}${desc}`;
         });
 
+        const modelDetail = formatAvailableModelsDetail(ctx);
         const modelBlock =
-          models.length > 0
-            ? `\n\nAvailable models (use as \`model\` override; without an explicit model, subagents use the configured model pool, then the parent session's current model):\n${models.map((m) => `• ${m}`).join("\n")}`
+          modelDetail
+            ? `\n\nAvailable models (use as \`model\` override; without an explicit model, subagents use the configured model pool, then the parent session's current model):\n${modelDetail}`
             : "";
 
         const pool = readConfiguredModelPool();

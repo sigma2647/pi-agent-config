@@ -168,11 +168,42 @@ describe("resolveEffectiveModelWithPool", () => {
     const first = resolveEffectiveModelWithPool({}, null, SESSION);
     assert.equal(first.model, "zai-coding-cn/glm-5.3");
     assert.equal(first.source, "pool");
+    assert.equal(first.attempt, 0);
 
     markModelFailed("zai-coding-cn/glm-5.3");
     const second = resolveEffectiveModelWithPool({}, null, SESSION);
     assert.equal(second.model, "zai-coding-cn/glm-5.2");
     assert.equal(second.chain[0], "zai-coding-cn/glm-5.3"); // chain order unchanged
+    assert.equal(second.attempt, 1);
+  });
+
+  it("reports the actual head index when earlier entries are cooling", () => {
+    // Regression: an explicit `model` (or pool head) that is still cooling is
+    // skipped at launch, but `attempt` must point at the model that ACTUALLY
+    // ran — not at chain[0] — so the result reports the real model.
+    setEnv("PI_CODING_AGENT_DIR", tmpDir);
+    const poolFile = join(tmpDir, "subagent-models.txt");
+    writeFileSync(
+      poolFile,
+      "zai-coding-cn/glm-5.3\nzai-coding-cn/glm-5.2\ndeepseek/deepseek-v4-pro\n",
+    );
+    setEnv("PI_SUBAGENT_MODEL_COOLDOWN_MS", "600000");
+    clearModelCooldowns();
+    markModelFailed("zai-coding-cn/glm-5.3");
+    markModelFailed("zai-coding-cn/glm-5.2");
+
+    const resolved = resolveEffectiveModelWithPool(
+      { model: "zai-coding-cn/glm-5.3" },
+      null,
+      SESSION,
+    );
+    assert.equal(resolved.model, "deepseek/deepseek-v4-pro");
+    assert.equal(resolved.chain[resolved.attempt], "deepseek/deepseek-v4-pro");
+    assert.notEqual(resolved.attempt, 0);
+
+    // Restore shared state the later tests in this describe block rely on.
+    clearModelCooldowns();
+    writeFileSync(poolFile, "zai-coding-cn/glm-5.3\nzai-coding-cn/glm-5.2\n");
   });
 
   it("explicit param model wins over pool and keeps its priority", () => {
