@@ -46,3 +46,14 @@ Keep your response concise. Skip preamble and unnecessary explanation.
 
 Files are re-scanned every time the menu opens and every time a message is
 sent, so edits take effect immediately — no `/reload` needed.
+
+Frontmatter validation schema is available at `snippet.schema.json`. In VS Code, you can bind it via `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "./extensions/prompt-snippets/snippet.schema.json": "extensions/prompt-snippets/snippets/*.md"
+  }
+}
+```
+

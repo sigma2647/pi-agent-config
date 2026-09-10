@@ -9,9 +9,17 @@ agents:
 prompts:
     @./setup.sh prompts
 
-# 冒烟检查：用 pi 自己的加载器验证所有 pi.extensions 可加载（缺文件/坏 import 会在这里拦下）
-check:
+# 冒烟检查：验证所有 pi.extensions 可加载并校验 snippets 规范
+check: check-extensions check-snippets
+
+# 检查所有扩展是否能正常被 pi 加载
+check-extensions:
     @node extensions/check.mjs
+
+# 校验 prompt-snippets 规则文件是否符合 schema
+check-snippets:
+    @just -f extensions/prompt-snippets/justfile check
+
 
 # 安装所有扩展声明的 CLI 到 ~/.local/bin（扫描每个 */package.json 的 pi.cli 声明）
 install: check

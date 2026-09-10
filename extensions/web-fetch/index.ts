@@ -21,8 +21,7 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet:
 			"Fetch a URL and extract its readable content as markdown.",
 		promptGuidelines: [
-			"Use web_fetch to READ a known URL (incl. results from web_search); snippets are previews, not source.",
-			"GitHub commits/releases/activity use `gh api`, not web_fetch; web_fetch is for PR/issue/file content.",
+			"Use web_fetch to READ a known URL or document. For GitHub metadata/commits/releases, use `gh api`.",
 			"Truncated (>30 KB) output carries a retrieveId: call web_fetch({ retrieve: \"<id>\" }) to get the full document.",
 		],
 

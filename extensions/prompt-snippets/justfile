@@ -1,0 +1,6 @@
+default:
+    @just --list
+
+# 校验所有 snippets/*.md 文件是否符合 snippet.schema.json
+check:
+    @node check.mjs

@@ -101,7 +101,7 @@ function normalizeOptions(options: Array<{ label: string; value?: string; descri
 }
 
 function getOtherLabel(options: AskOption[]): string {
-	return options.some((option) => option.label.toLowerCase() === "other") ? "Other (custom)" : "Other";
+	return options.some((option) => option.label.trim().toLowerCase() === "other") ? "Other (custom)" : "Other";
 }
 
 function createEditorTheme(theme: any): EditorTheme {
@@ -200,11 +200,35 @@ function buildResult(question: string, context: string | undefined, mode: AskUse
 	};
 }
 
+/**
+ * Route the tool's AbortSignal into a custom UI's `done()`. Without this, an
+ * aborted turn leaves the dialog mounted and the shared UI lock held forever,
+ * which blocks every later pop-up tool in this process.
+ */
+function bindAbort<T>(signal: AbortSignal | undefined, done: (result: T) => void): (result: T) => void {
+	let settled = false;
+	function onAbort() {
+		finish(null as unknown as T);
+	}
+	function finish(result: T) {
+		if (settled) return;
+		settled = true;
+		signal?.removeEventListener("abort", onAbort);
+		done(result);
+	}
+	if (signal) {
+		if (signal.aborted) onAbort();
+		else signal.addEventListener("abort", onAbort, { once: true });
+	}
+	return finish;
+}
+
 async function askSingleChoice(
 	ctx: any,
 	question: string,
 	context: string | undefined,
 	options: AskOption[],
+	signal: AbortSignal | undefined,
 ): Promise<AskAnswer | null> {
 	const otherLabel = getOtherLabel(options);
 	const allOptions: DisplayOption[] = [
@@ -213,6 +237,7 @@ async function askSingleChoice(
 	];
 
 	return ctx.ui.custom<AskAnswer | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer | null) => void) => {
+		const finish = bindAbort<AskAnswer | null>(signal, done);
 		let optionIndex = 0;
 		let editMode = false;
 		let cachedLines: string[] | undefined;
@@ -222,7 +247,7 @@ async function askSingleChoice(
 		editor.onSubmit = (value) => {
 			const trimmed = value.trim();
 			if (!trimmed) return;
-			done({ type: "other", label: trimmed, value: trimmed });
+			finish({ type: "other", label: trimmed, value: trimmed });
 		};
 
 		function refresh() {
@@ -261,7 +286,7 @@ async function askSingleChoice(
 					refresh();
 					return;
 				}
-				done({
+				finish({
 					type: "option",
 					label: selected.label,
 					value: selected.value,
@@ -270,7 +295,7 @@ async function askSingleChoice(
 				return;
 			}
 			if (matchesKey(data, Key.escape)) {
-				done(null);
+				finish(null);
 			}
 		}
 
@@ -338,6 +363,7 @@ async function askMultiChoice(
 	question: string,
 	context: string | undefined,
 	options: AskOption[],
+	signal: AbortSignal | undefined,
 ): Promise<AskAnswer[] | null> {
 	const otherLabel = getOtherLabel(options);
 	const choiceItems: DisplayOption[] = options.map((option, index) => ({
@@ -353,6 +379,7 @@ async function askMultiChoice(
 	];
 
 	return ctx.ui.custom<AskAnswer[] | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer[] | null) => void) => {
+		const finish = bindAbort<AskAnswer[] | null>(signal, done);
 		let optionIndex = 0;
 		let editMode = false;
 		let cachedLines: string[] | undefined;
@@ -432,7 +459,7 @@ async function askMultiChoice(
 			if (matchesKey(data, Key.enter)) {
 				if (current.isSubmit) {
 					if (selected.size > 0) {
-						done(sortAnswers(Array.from(selected.values())));
+						finish(sortAnswers(Array.from(selected.values())));
 					}
 					return;
 				}
@@ -447,7 +474,7 @@ async function askMultiChoice(
 			}
 
 			if (matchesKey(data, Key.escape)) {
-				done(null);
+				finish(null);
 			}
 		}
 
@@ -570,17 +597,15 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		name: "ask_user_question",
 		label: "ask_user_question",
 		description:
-			"Ask the user a single question and pause execution until they answer. Use this when requirements are ambiguous, user preferences are needed, a decision would materially affect implementation, or you need confirmation before proceeding. Ask exactly one question per tool call, and prefer multiple separate tool calls over bundling unrelated questions together.",
+			"Ask the user a single question and pause execution until they answer. Use this only when the answer materially changes correctness or safety, or determines whether a destructive operation is safe. Ask exactly one question per tool call, and prefer multiple separate tool calls over bundling unrelated questions together.",
 		promptSnippet:
-			"Use this tool to ask exactly one clarifying question, missing-requirement question, preference question, or decision question before continuing.",
+			"Use this tool to ask exactly one question when the answer affects correctness, safety, or whether a destructive action is safe.",
 		promptGuidelines: [
-			"Ask exactly one question per tool call.",
-			"If you need answers to multiple questions, make multiple separate ask_user_question tool calls instead of combining them into one prompt.",
-			'Users will always be able to select "Other" to provide custom text input when options are provided.',
-			"Use multiSelect: true only when you need multiple answers to the same question.",
-			'If you recommend a specific option, make it the first option in the list and add "(Recommended)" at the end of the label.',
-			"Prefer this tool over guessing when requirements, preferences, or implementation choices are unclear.",
-			"Use this tool when multiple valid implementation paths exist and the preferred path depends on user choice.",
+			"Use ask_user_question for one question per call; make separate ask_user_question calls instead of bundling unrelated questions.",
+			"Do NOT use ask_user_question for stylistic or naming preferences, or when any reasonable default exists — just pick one and note the assumption.",
+			'When ask_user_question shows options, the user can always choose "Other" and type custom text.',
+			"Use ask_user_question with multiSelect: true only when one question needs multiple answers.",
+			'In ask_user_question options, put a recommended option first and add "(Recommended)" to its label.',
 		],
 		parameters: AskUserQuestionParams,
 
@@ -599,6 +624,9 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 
 			return withUILock(async () => {
 				if (mode === "text") {
+					// ctx.ui.editor() takes no AbortSignal, so this one dialog cannot be
+					// closed programmatically. It self-cancels on Esc/Ctrl+C, and the
+					// turn cannot be aborted by keyboard while it has focus.
 					const editorTitle = context ? `${params.question}\n\n${context}` : params.question;
 					const answer = await ctx.ui.editor(editorTitle);
 					if (answer === undefined) {
@@ -610,14 +638,14 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 				}
 
 				if (mode === "single-select") {
-					const answer = await askSingleChoice(ctx, params.question, context, options);
+					const answer = await askSingleChoice(ctx, params.question, context, options, signal);
 					if (!answer) {
 						return cancelledResult(params.question, mode, context);
 					}
 					return buildResult(params.question, context, mode, [answer]);
 				}
 
-				const answers = await askMultiChoice(ctx, params.question, context, options);
+				const answers = await askMultiChoice(ctx, params.question, context, options, signal);
 				if (!answers) {
 					return cancelledResult(params.question, mode, context);
 				}
