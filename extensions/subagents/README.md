@@ -308,14 +308,31 @@ Nothing is hardcoded to a provider. The child's model resolves in this order:
 
 When a subagent dies from a **provider error** (429 rate limit, overload — the child's own auto-retry already exhausted), the run is **automatically relaunched on the next pool entry** instead of surfacing the failure. Each entry is tried at most once per spawn; models that failed go into a **cooldown** (default 10 min) so parallel spawns skip them too. The result message shows the fallback trail (e.g. `Model fallback: glm-5.3 → glm-5.2 …`).
 
-Configure the pool in `<agent config dir>/subagent-models.txt` (one `provider/model` per line, `#` comments), or override with the env var `PI_SUBAGENT_MODEL_POOL` (comma- or newline-separated). Cooldown length: `PI_SUBAGENT_MODEL_COOLDOWN_MS` (default `600000`).
+Configure the pool in `<agent config dir>/subagent-models.json`, or override with the env var `PI_SUBAGENT_MODEL_POOL` (comma- or newline-separated). Cooldown length: `PI_SUBAGENT_MODEL_COOLDOWN_MS` (or the JSON `cooldownMs`, default `600000`).
+
+```json
+// ~/.pi/agent/subagent-models.json
+{
+  "models": [
+    "zai-coding-cn/glm-5.3",
+    { "ref": "zai-coding-cn/glm-5.2", "note": "same account, cheaper" },
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash"
+  ],
+  "cooldownMs": 600000
+}
+```
+
+Each `models` entry is either a `provider/model[:thinking]` string or an object `{"ref": "...", "note": "..."}`. The `note` is free text shown next to the entry by `subagents_list`. Array order is the priority order.
+
+A malformed JSON file throws a fix-it message at spawn time instead of silently disabling the pool — a typo must not look like "no pool configured".
+
+The legacy `subagent-models.txt` (one ref per line, `#` comments) still works, but only when no JSON file exists:
 
 ```
 # ~/.pi/agent/subagent-models.txt
 zai-coding-cn/glm-5.3
 zai-coding-cn/glm-5.2
-deepseek/deepseek-v4-pro
-deepseek/deepseek-v4-flash
 ```
 
 Call `subagents_list` to see the active pool (including which entries are in cooldown). Claude CLI children (`cli: claude`) ignore the pool — `claude --model` has different semantics.

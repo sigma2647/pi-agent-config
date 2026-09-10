@@ -1241,12 +1241,74 @@ function resolveEffectiveModel(
 // time and fall through automatically when a provider error (e.g. 429 rate
 // limit) kills a run. Config sources, first wins:
 //   1. PI_SUBAGENT_MODEL_POOL env var (comma- or newline-separated refs)
-//   2. <agent config dir>/subagent-models.txt (one ref per line, # comments)
+//   2. <agent config dir>/subagent-models.json (preferred; see ModelPoolConfig)
+//   3. <agent config dir>/subagent-models.txt (legacy, one ref per line)
 // A model that failed with a provider error is skipped for a cooldown period
-// (PI_SUBAGENT_MODEL_COOLDOWN_MS, default 10 min) so parallel spawns avoid it.
+// (PI_SUBAGENT_MODEL_COOLDOWN_MS or the JSON "cooldownMs", default 10 min) so
+// parallel spawns avoid it.
 
+const SUBAGENT_MODEL_POOL_JSON_FILENAME = "subagent-models.json";
 const SUBAGENT_MODEL_POOL_FILENAME = "subagent-models.txt";
 const DEFAULT_MODEL_COOLDOWN_MS = 10 * 60_000;
+
+/** A pool entry: `provider/model`, optionally with a `:thinking` suffix. */
+function isModelPoolRef(ref: unknown): ref is string {
+  if (typeof ref !== "string") return false;
+  const slash = ref.indexOf("/");
+  return slash > 0 && slash < ref.length - 1;
+}
+
+/** Parsed pool config: ordered refs, optional per-model notes, optional cooldown. */
+interface ModelPoolConfig {
+  refs: string[];
+  /** raw ref → free-text note, shown in `subagents_list`. */
+  notes: Map<string, string>;
+  cooldownMs?: number;
+}
+
+/**
+ * Parse subagent-models.json:
+ *   { "models": ["provider/model", { "ref": "provider/model", "note": "why" }],
+ *     "cooldownMs": 600000 }
+ * Malformed content throws with a fix-it message instead of silently
+ * disabling the pool — a typo in the file must not look like "no pool".
+ */
+function parseModelPoolJson(text: string): ModelPoolConfig {
+  const config: ModelPoolConfig = { refs: [], notes: new Map() };
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `subagent-models.json is not valid JSON: ${(error as Error).message}. ` +
+        `Fix it or delete it to fall back to subagent-models.txt.`,
+    );
+  }
+  const models = (data as { models?: unknown } | null)?.models;
+  if (!Array.isArray(models)) {
+    throw new Error(
+      `subagent-models.json needs a "models" array, e.g. ` +
+        `{"models": ["provider/model", {"ref": "provider/model", "note": "why"}]}.`,
+    );
+  }
+  models.forEach((entry, index) => {
+    const ref = typeof entry === "string" ? entry : (entry as { ref?: unknown } | null)?.ref;
+    if (!isModelPoolRef(ref)) {
+      throw new Error(
+        `subagent-models.json "models" entry #${index + 1} is not a provider/model ref: ${JSON.stringify(entry)}.`,
+      );
+    }
+    if (config.refs.includes(ref)) return;
+    config.refs.push(ref);
+    const note = typeof entry === "object" && entry !== null ? (entry as { note?: unknown }).note : undefined;
+    if (typeof note === "string" && note.trim()) config.notes.set(ref, note.trim());
+  });
+  const cooldownMs = (data as { cooldownMs?: unknown }).cooldownMs;
+  if (typeof cooldownMs === "number" && Number.isFinite(cooldownMs) && cooldownMs >= 0) {
+    config.cooldownMs = cooldownMs;
+  }
+  return config;
+}
 
 /**
  * Strip a `:thinking` suffix from a model reference, leaving the canonical
@@ -1270,27 +1332,55 @@ function parseModelPoolLines(text: string): string[] {
   return refs;
 }
 
-/** Read the configured pool: env override first, then the config file. */
-function readConfiguredModelPool(): string[] {
+/**
+ * Read the configured pool: env override → subagent-models.json → legacy
+ * subagent-models.txt → empty. Only the config-file leg is swallowed on
+ * read failure; malformed JSON throws so the user sees the typo.
+ */
+function readModelPoolConfig(): ModelPoolConfig {
   const env = process.env.PI_SUBAGENT_MODEL_POOL?.trim();
   if (env) {
-    return env
-      .split(/[,\n]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.indexOf("/") > 0 && s.indexOf("/") < s.length - 1);
+    const refs: string[] = [];
+    for (const raw of env.split(/[,\n]+/)) {
+      const ref = raw.trim();
+      if (isModelPoolRef(ref) && !refs.includes(ref)) refs.push(ref);
+    }
+    return { refs, notes: new Map() };
+  }
+  const dir = getAgentConfigDir();
+  const jsonFile = join(dir, SUBAGENT_MODEL_POOL_JSON_FILENAME);
+  if (existsSync(jsonFile)) {
+    let text: string;
+    try {
+      text = readFileSync(jsonFile, "utf-8");
+    } catch (error) {
+      throw new Error(`Cannot read ${jsonFile}: ${(error as Error).message}`);
+    }
+    return parseModelPoolJson(text);
   }
   try {
-    const file = join(getAgentConfigDir(), SUBAGENT_MODEL_POOL_FILENAME);
-    return parseModelPoolLines(readFileSync(file, "utf-8"));
+    return { refs: parseModelPoolLines(readFileSync(join(dir, SUBAGENT_MODEL_POOL_FILENAME), "utf-8")), notes: new Map() };
   } catch {
-    return [];
+    return { refs: [], notes: new Map() };
   }
+}
+
+/** Read the configured pool as a flat, ordered list of model refs. */
+function readConfiguredModelPool(): string[] {
+  return readModelPoolConfig().refs;
 }
 
 function getModelCooldownMs(): number {
   const raw = process.env.PI_SUBAGENT_MODEL_COOLDOWN_MS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MODEL_COOLDOWN_MS;
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  try {
+    // Cooldown bookkeeping runs on the error path — a broken pool file there
+    // must not mask the provider error that triggered it.
+    return readModelPoolConfig().cooldownMs ?? DEFAULT_MODEL_COOLDOWN_MS;
+  } catch {
+    return DEFAULT_MODEL_COOLDOWN_MS;
+  }
 }
 
 /** model ref → timestamp until which spawns skip it after a provider failure. */
@@ -1500,7 +1590,9 @@ export const __test__ = {
   resolveEffectiveThinking,
   assertModelAvailable,
   parseModelPoolLines,
+  parseModelPoolJson,
   readConfiguredModelPool,
+  readModelPoolConfig,
   buildModelChain,
   isModelCooling,
   markModelFailed,
@@ -2433,11 +2525,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             ? `\n\nAvailable models (use as \`model\` override; without an explicit model, subagents use the configured model pool, then the parent session's current model):\n${modelDetail}`
             : "";
 
-        const pool = readConfiguredModelPool();
+        const poolConfig = readModelPoolConfig();
+        const pool = poolConfig.refs;
         const poolBlock =
           pool.length > 0
             ? `\n\nSubagent model pool (spawn preference order; provider failures fall through automatically):\n${pool
-                .map((m) => `• ${m}${isModelCooling(m) ? " (cooldown)" : ""}`)
+                .map((m) => {
+                  const note = poolConfig.notes.get(m);
+                  return `• ${m}${note ? ` — ${note}` : ""}${isModelCooling(m) ? " (cooldown)" : ""}`;
+                })
                 .join("\n")}`
             : "";
 

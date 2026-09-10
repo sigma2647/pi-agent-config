@@ -4,14 +4,16 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { __test__ } from "../pi-extension/subagents/index.ts";
 
 const {
   parseModelPoolLines,
+  parseModelPoolJson,
   readConfiguredModelPool,
+  readModelPoolConfig,
   buildModelChain,
   resolveEffectiveModelWithPool,
   isModelCooling,
@@ -230,5 +232,73 @@ describe("resolveEffectiveModelWithPool", () => {
       { modelRegistry: { getAvailable: () => [] } },
     );
     assert.equal(resolved.model, "zai-coding-cn/glm-5.2");
+  });
+});
+
+describe("parseModelPoolJson", () => {
+  it("accepts bare refs and {ref, note} entries, keeps order, dedupes", () => {
+    const config = parseModelPoolJson(
+      JSON.stringify({
+        models: [
+          "zai-coding-cn/glm-5.3",
+          { ref: "zai-coding-cn/glm-5.2", note: "  cheaper fallback  " },
+          "zai-coding-cn/glm-5.3",
+        ],
+        cooldownMs: 120000,
+      }),
+    );
+    assert.deepEqual(config.refs, ["zai-coding-cn/glm-5.3", "zai-coding-cn/glm-5.2"]);
+    assert.equal(config.notes.get("zai-coding-cn/glm-5.2"), "cheaper fallback");
+    assert.equal(config.cooldownMs, 120000);
+  });
+
+  it("throws on broken JSON, a missing models array, and a malformed entry", () => {
+    assert.throws(() => parseModelPoolJson("{ nope"), /not valid JSON/);
+    assert.throws(() => parseModelPoolJson("{}"), /needs a "models" array/);
+    assert.throws(
+      () => parseModelPoolJson(JSON.stringify({ models: ["no-slash"] })),
+      /entry #1 is not a provider\/model ref/,
+    );
+  });
+});
+
+describe("json pool file", () => {
+  const jsonDir = join(tmpDir, "json-pool");
+
+  before(() => mkdirSync(jsonDir, { recursive: true }));
+  after(() => setEnv("PI_SUBAGENT_MODEL_POOL", undefined));
+
+  it("json wins over the legacy txt file and feeds the chain", () => {
+    setEnv("PI_SUBAGENT_MODEL_POOL", undefined);
+    setEnv("PI_CODING_AGENT_DIR", jsonDir);
+    writeFileSync(join(jsonDir, "subagent-models.txt"), "deepseek/deepseek-v4-flash\n");
+    writeFileSync(
+      join(jsonDir, "subagent-models.json"),
+      JSON.stringify({ models: [{ ref: "zai-coding-cn/glm-5.3", note: "primary" }] }),
+    );
+    assert.deepEqual(readConfiguredModelPool(), ["zai-coding-cn/glm-5.3"]);
+    assert.deepEqual(buildModelChain({}, null, SESSION), ["zai-coding-cn/glm-5.3"]);
+
+    // Env override still outranks the JSON file.
+    setEnv("PI_SUBAGENT_MODEL_POOL", "deepseek/deepseek-v4-pro");
+    assert.deepEqual(readConfiguredModelPool(), ["deepseek/deepseek-v4-pro"]);
+  });
+
+  it("reads cooldownMs from the file and lets the env var override it", () => {
+    setEnv("PI_SUBAGENT_MODEL_POOL", undefined);
+    setEnv("PI_CODING_AGENT_DIR", jsonDir);
+    setEnv("PI_SUBAGENT_MODEL_COOLDOWN_MS", undefined);
+    writeFileSync(
+      join(jsonDir, "subagent-models.json"),
+      JSON.stringify({ models: ["zai-coding-cn/glm-5.3"], cooldownMs: 1234 }),
+    );
+    markModelFailed("zai-coding-cn/glm-5.3");
+    assert.equal(isModelCooling("zai-coding-cn/glm-5.3"), true);
+    clearModelCooldowns();
+
+    setEnv("PI_SUBAGENT_MODEL_COOLDOWN_MS", "0");
+    markModelFailed("zai-coding-cn/glm-5.3");
+    assert.equal(isModelCooling("zai-coding-cn/glm-5.3"), false);
+    setEnv("PI_SUBAGENT_MODEL_COOLDOWN_MS", undefined);
   });
 });
