@@ -1,6 +1,6 @@
 ---
 name: Ask questions
-description: Ask questions to reach a shared understanding.
+description: 反复提问，直到理解意图
 placement: append
 order: 10
 ---

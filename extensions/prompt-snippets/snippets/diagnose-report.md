@@ -1,6 +1,6 @@
 ---
 name: Diagnose, don't fix
-description: Read-only, report findings and a proposed fix
+description: 只读排查，报告发现和修复方案，先不动手
 placement: append
 order: 40
 ---

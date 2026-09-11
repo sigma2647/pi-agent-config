@@ -1,6 +1,6 @@
 ---
 name: Session kickoff
-description: Get oriented, report back before starting work
+description: 熟悉项目并汇报，对齐之后再动手
 placement: prepend
 order: 10
 ---

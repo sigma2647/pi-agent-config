@@ -109,17 +109,17 @@ export default function (pi: ExtensionAPI) {
 		const theme = ctx.ui.theme;
 		const lines: string[] = [];
 		if (prepends.length > 0) {
-			lines.push(theme.fg("accent", `↑ prepend: ${prepends.map((s) => s.name).join(" · ")}`));
+			lines.push(theme.fg("accent", `↑ 前置：${prepends.map((s) => s.name).join(" · ")}`));
 		}
 		if (appends.length > 0) {
-			lines.push(theme.fg("warning", `↓ append: ${appends.map((s) => s.name).join(" · ")}`));
+			lines.push(theme.fg("warning", `↓ 后置：${appends.map((s) => s.name).join(" · ")}`));
 		}
 		ctx.ui.setWidget(WIDGET_ID, lines);
 	}
 
 	async function openMenu(ctx: ExtensionContext) {
 		if (ctx.mode !== "tui") {
-			ctx.ui.notify("Snippet menu requires interactive mode", "warning");
+			ctx.ui.notify("片段菜单需要交互模式", "warning");
 			return;
 		}
 
@@ -128,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 		enabled = new Set([...enabled].filter((id) => snippets.some((s) => s.id === id)));
 
 		if (snippets.length === 0) {
-			ctx.ui.notify(`No snippets found in ${snippetsDir}`, "warning");
+			ctx.ui.notify(`未找到片段：${snippetsDir}`, "warning");
 			updateWidget(ctx);
 			return;
 		}
@@ -156,10 +156,10 @@ export default function (pi: ExtensionAPI) {
 			/** List rows with the item index each row corresponds to (null for headers/blanks). */
 			const buildListRows = (width: number): { text: string; itemIndex: number | null }[] => {
 				const rows: { text: string; itemIndex: number | null }[] = [];
-				rows.push({ text: theme.fg("dim", "↑ PREPEND — added before your message"), itemIndex: null });
+				rows.push({ text: theme.fg("dim", "↑ 前置"), itemIndex: null });
 				prepends.forEach((s, i) => rows.push({ text: itemRow(s, i, width), itemIndex: i }));
 				rows.push({ text: "", itemIndex: null });
-				rows.push({ text: theme.fg("dim", "↓ APPEND — added after your message"), itemIndex: null });
+				rows.push({ text: theme.fg("dim", "↓ 后置"), itemIndex: null });
 				appends.forEach((s, i) => rows.push({ text: itemRow(s, prepends.length + i, width), itemIndex: prepends.length + i }));
 				return rows;
 			};
@@ -167,7 +167,7 @@ export default function (pi: ExtensionAPI) {
 			const buildPreviewRows = (snippet: Snippet, width: number): string[] => {
 				const rows: string[] = [];
 				rows.push(truncateToWidth(theme.bold(snippet.name), width));
-				rows.push(truncateToWidth(theme.fg("dim", `${snippet.placement} · order ${snippet.order} · ${snippet.id}`), width));
+				rows.push(truncateToWidth(theme.fg("dim", `${snippet.placement === "prepend" ? "前置" : "后置"} · 顺序 ${snippet.order} · ${snippet.id}`), width));
 				rows.push(theme.fg("dim", "─".repeat(Math.min(width, 40))));
 				for (const line of snippet.body.split("\n")) {
 					for (const wrapped of wrapTextWithAnsi(line, width)) {
@@ -227,16 +227,16 @@ export default function (pi: ExtensionAPI) {
 						const v = viewport(rows.map((r) => r.text), listScroll, maxView, cursorRow);
 						content = v.out;
 						listScroll = v.scroll;
-						title = "Prompt snippets";
-						hints = "↑↓/jk navigate • Space toggle • Tab preview • Enter apply • Esc cancel";
+						title = "提示词片段";
+						hints = "↑↓/jk 移动 · 空格 勾选 · Tab 预览 · 回车 应用 · Esc 取消";
 					} else {
 						const snippet = items[cursor];
 						const rows = buildPreviewRows(snippet, width);
 						const v = viewport(rows, previewScroll, maxView);
 						content = v.out;
 						previewScroll = v.scroll;
-						title = `Preview: ${snippet.name}`;
-						hints = "↑↓/jk scroll • Tab/Esc back";
+						title = `预览：${snippet.name}`;
+						hints = "↑↓/jk 滚动 · Tab/Esc 返回";
 					}
 
 					return [

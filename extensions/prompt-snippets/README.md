@@ -7,7 +7,8 @@ standalone instruction — toggle exactly the ones you want per message.
 ## Usage
 
 - Press **alt+s** or run **/snippets** to open the toggle menu.
-  - `up`/`down` to navigate, `space` to toggle, `enter` to apply, `esc` to cancel.
+  - `up`/`down` (also `j`/`k`, `ctrl+n`/`ctrl+p`) to navigate, `space` to
+    toggle, `enter` to apply, `esc` to cancel. The menu UI text is Chinese.
   - `tab` previews the highlighted snippet (name, placement, order, filename,
     and full body; `up`/`down` scroll long bodies). `tab` or `esc` returns to
     the list with your cursor position preserved.
@@ -15,8 +16,8 @@ standalone instruction — toggle exactly the ones you want per message.
     exceeds the viewport (max height adapts to your terminal), with
     `↑ n more` / `↓ n more` indicators when clipped.
 - Active snippets show up as a widget above the editor:
-  - `↑ prepend: ...` (accent color) — inserted before your message
-  - `↓ append: ...` (warning color) — inserted after your message
+  - `↑ 前置：...` (accent color) — inserted before your message
+  - `↓ 后置：...` (warning color) — inserted after your message
 - When you send a message, active snippet bodies are merged into the message
   text: prepend group (sorted by `order`) → your text → append group (sorted
   by `order`), separated by blank lines.

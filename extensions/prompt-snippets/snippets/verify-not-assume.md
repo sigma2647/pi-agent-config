@@ -1,6 +1,6 @@
 ---
 name: Verify, don't assume
-description: Do not assume — verify
+description: 关键事实要核实，查不到就问
 placement: append
 order: 20
 ---

@@ -1,6 +1,6 @@
 ---
 name: Delegate exploration
-description: Keep context lean. Subagents explore, you verify critical parts
+description: 让子代理探索，自己只核实关键部分，保持上下文精简
 placement: append
 order: 30
 ---

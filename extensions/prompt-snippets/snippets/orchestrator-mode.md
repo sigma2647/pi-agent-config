@@ -1,6 +1,6 @@
 ---
 name: Orchestrator mode
-description: Pure high-level orchestrator session
+description: 调度模式，读代码和实现都派给子代理
 placement: prepend
 order: 30
 ---
