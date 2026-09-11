@@ -117,6 +117,16 @@ function createEditorTheme(theme: any): EditorTheme {
 	};
 }
 
+// Vim (j/k) and Emacs (Ctrl+N/Ctrl+P) aliases for the arrow keys. Ctrl+J is
+// deliberately absent: in legacy terminals it is byte-identical to Enter.
+function isNavUp(data: string): boolean {
+	return matchesKey(data, Key.up) || matchesKey(data, "k") || matchesKey(data, Key.ctrl("p"));
+}
+
+function isNavDown(data: string): boolean {
+	return matchesKey(data, Key.down) || matchesKey(data, "j") || matchesKey(data, Key.ctrl("n"));
+}
+
 function addWrapped(lines: string[], text: string, width: number, indent = ""): void {
 	const contentWidth = Math.max(1, width - indent.length);
 	for (const line of wrapTextWithAnsi(text, contentWidth)) {
@@ -268,12 +278,12 @@ async function askSingleChoice(
 				return;
 			}
 
-			if (matchesKey(data, Key.up)) {
+			if (isNavUp(data)) {
 				optionIndex = Math.max(0, optionIndex - 1);
 				refresh();
 				return;
 			}
-			if (matchesKey(data, Key.down)) {
+			if (isNavDown(data)) {
 				optionIndex = Math.min(allOptions.length - 1, optionIndex + 1);
 				refresh();
 				return;
@@ -339,7 +349,7 @@ async function askSingleChoice(
 				add(theme.fg("dim", " Enter to submit • Esc to go back"));
 			} else {
 				lines.push("");
-				add(theme.fg("dim", " ↑↓ navigate • Enter select • Esc cancel"));
+				add(theme.fg("dim", " ↑↓/jk navigate • Enter select • Esc cancel"));
 			}
 
 			add(theme.fg("accent", "─".repeat(width)));
@@ -427,12 +437,12 @@ async function askMultiChoice(
 				return;
 			}
 
-			if (matchesKey(data, Key.up)) {
+			if (isNavUp(data)) {
 				optionIndex = Math.max(0, optionIndex - 1);
 				refresh();
 				return;
 			}
-			if (matchesKey(data, Key.down)) {
+			if (isNavDown(data)) {
 				optionIndex = Math.min(allItems.length - 1, optionIndex + 1);
 				refresh();
 				return;
@@ -546,7 +556,7 @@ async function askMultiChoice(
 				if (selected.size === 0) {
 					add(theme.fg("warning", " Select at least one answer before submitting."));
 				}
-				add(theme.fg("dim", " ↑↓ navigate • Space toggle • Enter edit/submit • Esc cancel"));
+				add(theme.fg("dim", " ↑↓/jk navigate • Space toggle • Enter edit/submit • Esc cancel"));
 			}
 
 			add(theme.fg("accent", "─".repeat(width)));

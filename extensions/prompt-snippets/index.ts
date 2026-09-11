@@ -31,6 +31,16 @@ interface Snippet {
 	body: string;
 }
 
+// Vim (j/k) and Emacs (Ctrl+N/Ctrl+P) aliases for the arrow keys. Ctrl+J is
+// deliberately absent: in legacy terminals it is byte-identical to Enter.
+function isNavUp(data: string): boolean {
+	return matchesKey(data, Key.up) || matchesKey(data, "k") || matchesKey(data, Key.ctrl("p"));
+}
+
+function isNavDown(data: string): boolean {
+	return matchesKey(data, Key.down) || matchesKey(data, "j") || matchesKey(data, Key.ctrl("n"));
+}
+
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const snippetsDir = join(extensionDir, "snippets");
 const WIDGET_ID = "prompt-snippets";
@@ -218,7 +228,7 @@ export default function (pi: ExtensionAPI) {
 						content = v.out;
 						listScroll = v.scroll;
 						title = "Prompt snippets";
-						hints = "↑↓ navigate • Space toggle • Tab preview • Enter apply • Esc cancel";
+						hints = "↑↓/jk navigate • Space toggle • Tab preview • Enter apply • Esc cancel";
 					} else {
 						const snippet = items[cursor];
 						const rows = buildPreviewRows(snippet, width);
@@ -226,7 +236,7 @@ export default function (pi: ExtensionAPI) {
 						content = v.out;
 						previewScroll = v.scroll;
 						title = `Preview: ${snippet.name}`;
-						hints = "↑↓ scroll • Tab/Esc back";
+						hints = "↑↓/jk scroll • Tab/Esc back";
 					}
 
 					return [
@@ -242,10 +252,10 @@ export default function (pi: ExtensionAPI) {
 				invalidate() {},
 				handleInput(data: string) {
 					if (mode === "list") {
-						if (matchesKey(data, Key.up)) {
+						if (isNavUp(data)) {
 							cursor = (cursor - 1 + items.length) % items.length;
 							tui.requestRender();
-						} else if (matchesKey(data, Key.down)) {
+						} else if (isNavDown(data)) {
 							cursor = (cursor + 1) % items.length;
 							tui.requestRender();
 						} else if (matchesKey(data, Key.space)) {
@@ -263,10 +273,10 @@ export default function (pi: ExtensionAPI) {
 							done(false);
 						}
 					} else {
-						if (matchesKey(data, Key.up)) {
+						if (isNavUp(data)) {
 							previewScroll--;
 							tui.requestRender();
-						} else if (matchesKey(data, Key.down)) {
+						} else if (isNavDown(data)) {
 							previewScroll++;
 							tui.requestRender();
 						} else if (matchesKey(data, Key.tab) || matchesKey(data, Key.escape)) {
