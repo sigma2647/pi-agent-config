@@ -3,11 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "postinstall": "npm install --prefix extensions/web-fetch && npm install --prefix extensions/subagents",
+    "postinstall": "npm install --prefix extensions/web-fetch && npm install --prefix extensions/subagents && npm install --prefix extensions/dictation",
     "test:subagents": "npm --prefix extensions/subagents test && node --test extensions/subagents/test/system-prompt-mode.test.ts"
   },
   "pi": {
-    "extensions": ["./extensions/deepseek-cache-optimizer/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents", "./extensions/prompt-snippets/index.ts", "./extensions/ask-user-question.ts"],
+    "extensions": ["./extensions/deepseek-cache-optimizer/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents", "./extensions/prompt-snippets/index.ts", "./extensions/ask-user-question.ts", "./extensions/dictation"],
     "skills": ["./skills"],
     "prompts": ["./prompts"],
     "themes": ["./themes"]

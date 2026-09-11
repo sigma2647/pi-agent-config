@@ -32,6 +32,7 @@ extensions/install.sh          unified CLI installer
 extensions/web-fetch/          single URL fetch/extract (pi-wf)
 extensions/web-search/         brave → browser-probe → opencli search (pi-ws)
 extensions/subagents/          async mux-backed subagent package
+extensions/dictation/          offline + cloud speech-to-text dictation (pi-dictation)
 extensions/_common/            shared utilities
 ```
 
