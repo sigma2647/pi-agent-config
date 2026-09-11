@@ -7,26 +7,43 @@
  * stay thin and cannot drift apart.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { OutputConfig, DictationConfig } from "./config.ts";
 import { defaultConfigPath } from "./config.ts";
 import { detectRecorderTool } from "./audio.ts";
 import { localModelSpec, modelsRoot } from "./local/catalog.ts";
 import { modelState } from "./local/model.ts";
 import { describeSilence, probeMic } from "./mic.ts";
-import { SILENCE_MAX_AMPLITUDE } from "./wav.ts";
+import { SILENCE_MAX_AMPLITUDE, isPcm16Wav, pcm16DurationMs } from "./wav.ts";
 import { createProvider, providerStatuses, resolveProvider } from "./providers/index.ts";
 import type { SttProvider } from "./providers/types.ts";
 
 export const TRANSCRIBE_TIMEOUT_MS = Number.parseInt(process.env.PI_DICTATION_TIMEOUT_MS ?? "", 10) || 90_000;
 
+/**
+ * Below this, a cloud request costs more time (and money) than it can return:
+ * a mis-tap is not speech. Only applied when the file is a PCM16 WAV we can
+ * measure, so formats the provider understands but we cannot (mp3, 24-bit)
+ * are still sent as-is.
+ */
+export const MIN_CLOUD_AUDIO_MS = 300;
+
+export const isTooShortForCloud = (audioPath: string): boolean => {
+  try {
+    const audio = readFileSync(audioPath);
+    return isPcm16Wav(audio) && pcm16DurationMs(audio) < MIN_CLOUD_AUDIO_MS;
+  } catch {
+    return false;
+  }
+};
+
 export type TranscribeOptions = {
   config: DictationConfig;
   audioPath: string;
-  language?: string;
+  language?: string | undefined;
   /** Force a provider id instead of the configured one. */
-  providerId?: string;
-  signal?: AbortSignal;
+  providerId?: string | undefined;
+  signal?: AbortSignal | undefined;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -50,6 +67,10 @@ export const transcribeFile = async (options: TranscribeOptions): Promise<Transc
   }
 
   const provider: SttProvider = createProvider(resolved.id, resolved.config, env);
+  // Silent skip: no request, no waiting, same result as an empty transcript.
+  if (provider.kind === "cloud" && isTooShortForCloud(options.audioPath)) {
+    return { text: "", providerId: resolved.id, providerLabel: resolved.status.label };
+  }
   const signal = options.signal ?? AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS);
   const result = await provider.transcribe({ audioPath: options.audioPath, language: options.language, signal });
   return { text: result.text.trim(), providerId: resolved.id, providerLabel: resolved.status.label };

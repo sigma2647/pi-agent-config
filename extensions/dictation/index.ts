@@ -33,6 +33,7 @@ import {
   applyLiveDraft,
   createDictationEditorFactory,
   offsetCursor,
+  padAtCaret,
   placeEditorCursor,
   renderIndicator,
   renderLiveText,
@@ -185,6 +186,14 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     refresh(ctx ?? sessionCtx);
   };
 
+  /**
+   * True while a recording is live. Read through a call on purpose: `state` and
+   * `handle` change inside other functions (a cancel during an await), so a
+   * direct comparison would be narrowed to a stale value by the compiler — and
+   * would keep being stale at runtime too.
+   */
+  const stillRecording = (): boolean => state === "recording" && handle !== undefined;
+
   const stopTicker = (): void => {
     if (ticker) clearInterval(ticker);
     if (deadline) clearTimeout(deadline);
@@ -242,7 +251,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
 
       if (modelId) {
         const session = await createStreamingSession(modelId, config.capture.sampleRate);
-        if (state !== "recording" || !handle) {
+        if (!stillRecording()) {
           session.free();
           return;
         }
@@ -373,9 +382,14 @@ export default async function dictationExtension(pi: ExtensionAPI) {
 
   const insertIntoPrompt = (ctx: ExtensionContext, text: string): void => {
     if (!text) return;
+    const buffer = bufferOf();
+    // With the caret inside existing text, add a space where the transcript
+    // would otherwise glue onto an ASCII word; at the end of the prompt the
+    // configured trailing space already does that job.
+    const insert = buffer ? padAtCaret(buffer, text) : text;
     const cursorInsert = editor?.insertTextAtCursor?.bind(editor);
-    if (cursorInsert) cursorInsert(text);
-    else ctx.ui.setEditorText(`${ctx.ui.getEditorText()}${text}`);
+    if (cursorInsert) cursorInsert(insert);
+    else ctx.ui.setEditorText(`${ctx.ui.getEditorText()}${insert}`);
   };
 
   const submitPrompt = async (ctx: ExtensionContext): Promise<void> => {

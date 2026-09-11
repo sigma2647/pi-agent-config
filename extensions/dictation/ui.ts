@@ -105,8 +105,8 @@ export const renderLiveText = (options: {
   theme: Theme;
   text: string;
   strings: Strings;
-  width?: number;
-  measure?: (text: string) => number;
+  width?: number | undefined;
+  measure?: ((text: string) => number) | undefined;
 }): string => {
   const { theme, strings } = options;
   const label = `${strings.indicator.live} `;
@@ -227,6 +227,27 @@ export const editorCursorOffset = (editor: EditorBuffer): number => {
   const text = editor.getText();
   const cursor = editor.getCursor?.();
   return cursor ? cursorOffset(text, cursor) : text.length;
+};
+
+/**
+ * Pad a transcript so it cannot glue onto neighbouring words: inserting into
+ * "helloworld" at column 5 gives "hello <transcript> world".
+ *
+ * A space is added only where it is actually needed: the neighbouring character
+ * is an ASCII word character, and the transcript itself does not already start
+ * or end with whitespace. CJK does not use word spaces, so "打开" + transcript
+ * stays untouched. The transcript is never trimmed, so the configured trailing
+ * space survives.
+ */
+export const padAtCaret = (editor: EditorBuffer, text: string): string => {
+  if (!text) return text;
+  const full = editor.state?.lines ? editor.state.lines.join("\n") : editor.getText();
+  const caret = Math.max(0, Math.min(editorCursorOffset(editor), full.length));
+  const before = full.slice(0, caret);
+  const after = full.slice(caret);
+  const left = /[A-Za-z0-9_]$/.test(before) && !/^\s/.test(text) ? " " : "";
+  const right = /^[A-Za-z0-9_]/.test(after) && !/\s$/.test(text) ? " " : "";
+  return left || right ? `${left}${text}${right}` : text;
 };
 
 /** Replace `length` chars at `start`. Avoids setText, which always moves the caret to the end. */

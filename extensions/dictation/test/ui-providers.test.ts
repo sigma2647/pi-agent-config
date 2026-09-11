@@ -7,11 +7,14 @@ import type { Theme } from "../ui.ts";
 import { DEFAULT_CONFIG } from "../config.ts";
 import { resolveStrings } from "../strings.ts";
 import { createOpenAiCompatibleProvider } from "../providers/openai-compatible.ts";
-import { applyLiveDraft, createDictationEditorFactory, cursorOffset, editorCursorOffset, formatClock, injectRightLabel, insertAtEditorCursor, keepTail, offsetCursor, renderBars, renderIndicator, renderLiveText, renderWidget, replaceEditorRange, unwrapEditor, type EditorHelpers } from "../ui.ts";
+import { applyLiveDraft, createDictationEditorFactory, cursorOffset, editorCursorOffset, formatClock, injectRightLabel, insertAtEditorCursor, keepTail, offsetCursor, padAtCaret, renderBars, renderIndicator, renderLiveText, renderWidget, replaceEditorRange, unwrapEditor, type EditorHelpers } from "../ui.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as unknown as Theme;
 const strings = resolveStrings("zh");
 const base = { theme, strings, keybind: "ctrl+r", stopHint: strings.indicator.holdHint };
+
+/** pi's EditorComponent type does not declare getCursor; the wrapper forwards it. */
+type CursorComponent = { getCursor: () => { line: number; col: number } };
 
 /** Width maths without pi-tui: good enough to test the label placement. */
 const helpers: EditorHelpers = {
@@ -179,6 +182,31 @@ test("replaceEditorRange splices in the middle without rewriting the whole suffi
   assert.equal(editorCursorOffset(editor), 5);
 });
 
+test("padAtCaret separates a transcript from adjacent ASCII words", () => {
+  const at = (text: string, col: number) => ({
+    state: { lines: [text], cursorLine: 0, cursorCol: col },
+    getText: () => text,
+    setText: () => {},
+  });
+
+  // Caret inside a word: both neighbours are padded when the transcript has no
+  // whitespace of its own, and never doubled when it has.
+  assert.equal(padAtCaret(at("helloworld", 5), "my words"), " my words ");
+  assert.equal(padAtCaret(at("helloworld", 5), "my words "), " my words ");
+  // Already separated by spaces: nothing is added.
+  assert.equal(padAtCaret(at("hello world", 6), "my words "), "my words ");
+  // CJK does not use word spaces, so nothing is added there either.
+  assert.equal(padAtCaret(at("打开配志", 2), "听写 "), "听写 ");
+  // Caret at the start of a latin prompt still needs the right-hand space.
+  assert.equal(padAtCaret(at("world", 0), "my words"), "my words ");
+  // Caret at the end of "hello" must not glue either — and keeps its own
+  // trailing space instead of losing it.
+  assert.equal(padAtCaret(at("hello", 5), "my words"), " my words");
+  assert.equal(padAtCaret(at("hello", 5), "my words "), " my words ");
+  // An empty prompt is left exactly as the provider returned it.
+  assert.equal(padAtCaret(at("", 0), "my words "), "my words ");
+});
+
 test("the editor wrapper exposes getCursor so live insert is not stuck at the end", () => {
   const fake = {
     getText: () => "hello world",
@@ -188,7 +216,7 @@ test("the editor wrapper exposes getCursor so live insert is not stuck at the en
     getCursor: () => ({ line: 0, col: 5 }),
     borderColor: (value: string) => value,
   };
-  let ready: { getCursor?: () => { line: number; col: number } } | undefined;
+  let ready: CursorComponent | undefined;
   const factory = createDictationEditorFactory(() => fake as never, {
     keybind: "ctrl+r",
     helpers,
@@ -200,10 +228,10 @@ test("the editor wrapper exposes getCursor so live insert is not stuck at the en
     onSend: () => {},
     renderLabel: () => "",
     onEditorReady: (component) => {
-      ready = component;
+      ready = component as unknown as CursorComponent;
     },
   });
-  const ed = factory({} as never, {} as never, {} as never) as { getCursor: () => { line: number; col: number } };
+  const ed = factory({} as never, {} as never, {} as never) as unknown as CursorComponent;
   assert.deepEqual(ed.getCursor(), { line: 0, col: 5 });
   assert.deepEqual(ready?.getCursor?.(), { line: 0, col: 5 });
 });

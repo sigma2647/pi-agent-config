@@ -4,8 +4,15 @@
 	"type": "module",
 	"description": "Voice input for pi: offline SenseVoice model or cloud speech APIs",
 	"pi": {
-		"extensions": ["./index.ts"],
-		"cli": [{ "name": "pi-dictation", "entry": "./dev.ts" }]
+		"extensions": [
+			"./index.ts"
+		],
+		"cli": [
+			{
+				"name": "pi-dictation",
+				"entry": "./dev.ts"
+			}
+		]
 	},
 	"scripts": {
 		"test": "node --experimental-strip-types --no-warnings --test --test-timeout=60000 test/*.test.ts",
@@ -13,5 +20,11 @@
 	},
 	"dependencies": {
 		"sherpa-onnx": "^1.13.8"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^0.85.1",
+		"@earendil-works/pi-tui": "^0.85.1",
+		"@types/node": "^22",
+		"typescript": "^5.9.3"
 	}
 }

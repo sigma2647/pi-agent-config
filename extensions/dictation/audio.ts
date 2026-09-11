@@ -18,6 +18,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { CaptureConfig } from "./config.ts";
+import { defaultConfigPath } from "./config.ts";
 import { RIFF_HEADER_BYTES, SILENCE_MAX_AMPLITUDE, peakPcm16LeAmplitude } from "./wav.ts";
 import { describeSilence, listInputDevices } from "./mic.ts";
 
@@ -43,6 +44,15 @@ export type Recorder = ReturnType<typeof createRecorder>;
 const KILL_GRACE_MS = 3000;
 /** Keep enough PCM for a few seconds of meter history without unbounded growth. */
 const TAIL_CAPACITY = 64 * 1024;
+
+/**
+ * Microphone failures are the ones users cannot fix from the error text alone,
+ * so the message also says what the Pi agent should inspect and change.
+ * Kept to two lines: the human part of the message stays first.
+ */
+const captureFixHint = (capture: CaptureConfig): string =>
+  `Agent: the microphone capture failed. Check \`capture.tool\` (currently "${capture.tool}") and \`capture.device\` (currently "${capture.device || "auto"}\`) in ${defaultConfigPath()}; ` +
+  `list the inputs with \`/dictation mic\`, prefer the system default (or the final virtual) source over a physical device, then ask the user to try dictation again.`;
 
 export const detectRecorderTool = (
   capture: Pick<CaptureConfig, "tool" | "ffmpegPath">,
@@ -73,7 +83,7 @@ export type RecorderOptions = {
 export const createRecorder = (capture: CaptureConfig, options: RecorderOptions = {}) => ({
   start(): RecordHandle {
     const detected = detectRecorderTool(capture);
-    if (!detected.tool) throw new Error(detected.detail);
+    if (!detected.tool) throw new Error(`${detected.detail}. ${captureFixHint(capture)}`);
     const tool = detected.tool;
 
     const tempDir = mkdtempSync(join(tmpdir(), "pi-dictation-"));
@@ -270,7 +280,7 @@ export const commandFor = (tool: RecorderTool, capture: CaptureConfig): { comman
 
 const assertUsableAudio = async (outputPath: string, capture: CaptureConfig, captured: number, stderr: string): Promise<void> => {
   if (captured < capture.minBytes) {
-    throw new Error(`recording is empty (${captured} bytes) — check the microphone device and permission. ${tail(stderr)}`);
+    throw new Error(`recording is empty (${captured} bytes) — check the microphone device and permission. ${tail(stderr)} ${captureFixHint(capture)}`);
   }
   const peak = peakPcm16LeAmplitude(readFileSync(outputPath));
   if (peak === undefined || peak > SILENCE_MAX_AMPLITUDE) return;
@@ -280,7 +290,7 @@ const assertUsableAudio = async (outputPath: string, capture: CaptureConfig, cap
   // with its transmitter off, suspended monitor source).
   const report = await listInputDevices();
   const detail = describeSilence({ ...report, peak });
-  throw new Error(`recording is silent (peak ${peak}) — ${detail}. ${tail(stderr)}`.trim());
+  throw new Error(`recording is silent (peak ${peak}) — ${detail}. ${tail(stderr)} ${captureFixHint(capture)}`.trim());
 };
 
 const captureStderr = (child: ChildProcess): (() => string) => {

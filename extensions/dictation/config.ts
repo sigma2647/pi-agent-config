@@ -7,7 +7,7 @@
  * one predictable source of truth.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -166,10 +166,28 @@ export const ensureConfigFile = (configPath: string): boolean => {
   }
 };
 
-/** Persist the current config. Used by `/dictation provider` and `/dictation model use`. */
+/**
+ * Persist the current config. Used by `/dictation provider` and `/dictation model use`.
+ *
+ * Written to a temporary file and renamed into place: a crash (or a full disk)
+ * halfway through must not leave the user with a truncated config. rename is
+ * atomic on the same filesystem, and the temp name carries the pid so two
+ * sessions cannot clobber each other's half-written file.
+ */
 export const saveConfig = (config: DictationConfig, configPath = defaultConfigPath()): void => {
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  const temporaryPath = `${configPath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    renameSync(temporaryPath, configPath);
+  } catch (error) {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      /* keep the original write error */
+    }
+    throw error;
+  }
 };
 
 export type LoadConfigOptions = {

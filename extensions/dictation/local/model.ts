@@ -137,7 +137,8 @@ const downloadFile = async (
 };
 
 const fetchToFile = async (url: string, dest: string, signal?: AbortSignal): Promise<void> => {
-  const response = await fetch(url, { redirect: "follow", signal });
+  // `null` (not undefined) is how RequestInit says "no signal".
+  const response = await fetch(url, { redirect: "follow", signal: signal ?? null });
   if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`);
   await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(dest));
 };

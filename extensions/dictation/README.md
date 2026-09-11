@@ -2,6 +2,8 @@
 
 按 `ctrl+r` 开始说话，说完再按一次，文字就插到光标处。默认优先用**本地 SenseVoice 模型**（离线、免费、不用密钥）；没有本地模型时自动用云端 API。
 
+插到已有文字中间时会自动补空格（`hello` + 听写 + `world` 不会粘成 `helloworld`）；中文字之间不加空格。这条只在「说完再出字」（含云端）时生效：流式模型是边说边把字写在光标处，不做补空格。
+
 ```
 ctrl+r          开始 / 结束（默认 toggle 模式）
 Enter（录音中）  立刻结束 → 识别 → 直接发送
@@ -49,9 +51,11 @@ pi-dictation keytest        # 按几次 ctrl+r（含一次按住再松开），�
 ## 安装与依赖
 
 ```bash
-npm install --prefix extensions/dictation   # 依赖 sherpa-onnx (WASM，约 15 MB)
+npm install --prefix extensions/dictation   # 依赖 sherpa-onnx (WASM，约 15 MB)、类型检查用的 devDependencies
 cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 ```
+
+`npm run check` 用 `tsconfig.json` 做类型检查。devDependencies 里的 pi 类型包只给检查用：运行时这些模块由 pi 自己提供（它会把 `@earendil-works/*` 和 `typebox` 指向自带的副本），所以本地那几份不会被加载。
 
 录制的后端需要一个：`ffmpeg`（推荐）、`pw-record`、`arecord` 或 `sox`。模型下载/解压需要系统 `tar` 和 `bzip2`。
 
@@ -115,6 +119,8 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 ```
 
 规则：`https` 必须；`http` 只允许 localhost，且 localhost 不发送密钥。密钥可以写 `apiKeyEnv`（环境变量名）或 `apiKey`（明文，输出时会被隐藏）。
+
+短于 0.3 秒的录音（误触）不发给云端：本地就能量出长度、断定里面不可能有内容，直接跳过，省一次请求和等待。这条只对能测量的 PCM16 WAV 生效，mp3 等格式照常上传。
 
 ## 配置
 

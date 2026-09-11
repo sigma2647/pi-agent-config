@@ -35,6 +35,27 @@ export const pcm16DurationMs = (audio: Buffer, sampleRate = 16000, channels = 1)
   return Math.max(0, Math.round(((data.end - data.start) / bytesPerSecond) * 1000));
 };
 
+/**
+ * True when the buffer is 16-bit little-endian PCM inside a RIFF/WAVE container.
+ * Only that layout lets us trust `pcm16DurationMs`; anything else (mp3, 24-bit,
+ * float) must be passed to a provider untouched.
+ */
+export const isPcm16Wav = (audio: Buffer): boolean => {
+  if (!dataChunk(audio)) return false;
+  let offset = 12;
+  while (offset + 8 <= audio.length) {
+    const chunkId = audio.toString("ascii", offset, offset + 4);
+    const chunkSize = audio.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    if (chunkId === "fmt " && chunkSize >= 16 && start + 16 <= audio.length) {
+      // format 1 = PCM, bits per sample at byte 14 of the fmt chunk.
+      return audio.readUInt16LE(start) === 1 && audio.readUInt16LE(start + 14) === 16;
+    }
+    offset = start + chunkSize + (chunkSize % 2);
+  }
+  return false;
+};
+
 /** Peak absolute sample value in a raw PCM16LE buffer (no WAV header). */
 export const peakRawPcm16Le = (pcm: Buffer): number => {
   let max = 0;

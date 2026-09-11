@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, type DictationConfig } from "../config.ts";
-import { applyReplacements, doctorReport, formatTranscript, transcribeFile } from "../core.ts";
+import { applyReplacements, doctorReport, formatTranscript, isTooShortForCloud, transcribeFile } from "../core.ts";
+import { wavHeader } from "../audio.ts";
+import { isPcm16Wav } from "../wav.ts";
 import { providerStatus, resolveProvider } from "../providers/index.ts";
 import { deepgramTranscript } from "../providers/deepgram.ts";
 
@@ -146,4 +148,52 @@ test("deepgramTranscript reads the first alternative of the first channel", () =
   assert.equal(deepgramTranscript(payload), "hello world");
   assert.equal(deepgramTranscript({}), "");
   assert.equal(deepgramTranscript({ results: { channels: [] } }), "");
+});
+
+/** A structurally valid 16 kHz mono PCM16 WAV of the given length. */
+const wavOf = (ms: number): Buffer => {
+  const pcm = Buffer.alloc(Math.round((16000 * 2 * ms) / 1000));
+  return Buffer.concat([wavHeader(pcm.length, { sampleRate: 16000, channels: 1 }), pcm]);
+};
+
+test("isTooShortForCloud only skips audio it can actually measure", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-dictation-short-"));
+  const short = join(dir, "short.wav");
+  const long = join(dir, "long.wav");
+  const mp3 = join(dir, "note.mp3");
+  writeFileSync(short, wavOf(120));
+  writeFileSync(long, wavOf(1500));
+  writeFileSync(mp3, Buffer.from("ID3 this is not audio we can measure"));
+
+  assert.equal(isTooShortForCloud(short), true);
+  assert.equal(isTooShortForCloud(long), false);
+  assert.equal(isTooShortForCloud(mp3), false, "an unmeasurable format must reach the provider unchanged");
+  assert.equal(isTooShortForCloud(join(dir, "missing.wav")), false);
+  assert.equal(isPcm16Wav(wavOf(10)), true);
+  assert.equal(isPcm16Wav(Buffer.from("RIFF????WAVE")), false, "a WAV without a fmt chunk is not measurable");
+});
+
+test("a too-short cloud recording is skipped instead of uploaded", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-dictation-skip-"));
+  const audioPath = join(dir, "short.wav");
+  writeFileSync(audioPath, wavOf(120));
+
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    throw new Error("the cloud provider must not be called for a mis-tap");
+  }) as typeof fetch;
+  try {
+    const outcome = await transcribeFile({
+      config: configWith({ provider: "openai" }),
+      audioPath,
+      env: { OPENAI_API_KEY: "test-key" } as NodeJS.ProcessEnv,
+    });
+    assert.equal(outcome.text, "");
+    assert.equal(outcome.providerId, "openai");
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

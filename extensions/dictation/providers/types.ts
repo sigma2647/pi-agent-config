@@ -3,7 +3,7 @@
 export type TranscribeInput = {
   audioPath: string;
   /** Provider hint; undefined means "auto-detect". */
-  language?: string;
+  language?: string | undefined;
   signal: AbortSignal;
 };
 

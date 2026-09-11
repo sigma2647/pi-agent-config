@@ -91,7 +91,11 @@ test("recorder rejects a silent recording with an actionable message", async () 
   const handle = createRecorder(config.capture).start();
   try {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    await assert.rejects(() => handle.stop(), /silent/);
+    await assert.rejects(() => handle.stop(), (error: Error) => {
+      assert.match(error.message, /silent/);
+      assert.match(error.message, /Agent: .*capture\.device/);
+      return true;
+    });
   } finally {
     await handle.dispose().catch(() => {});
     restore();
@@ -114,7 +118,11 @@ test("recorder rejects a recording below the minimum size", async () => {
   const handle = createRecorder(config.capture).start();
   try {
     await new Promise((resolve) => setTimeout(resolve, 150));
-    await assert.rejects(() => handle.stop(), /empty/);
+    await assert.rejects(() => handle.stop(), (error: Error) => {
+      assert.match(error.message, /empty/);
+      assert.match(error.message, /Agent: /, "the error tells the agent what to fix");
+      return true;
+    });
   } finally {
     await handle.dispose().catch(() => {});
     restore();

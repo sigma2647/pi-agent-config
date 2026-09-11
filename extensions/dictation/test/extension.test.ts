@@ -52,6 +52,7 @@ type Harness = {
   tools: Set<string>;
   installedEditor: EditorComponent | undefined;
   pressRawKey(data: string): void;
+  setCursor(cursor: { line: number; col: number } | undefined): void;
   hasRawHandler(): boolean;
   restore(): void;
 };
@@ -86,10 +87,13 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
 
   let installedEditor: EditorComponent | undefined;
   let rawInputHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
+  // undefined = "caret at the end", which is what the other tests assume.
+  let cursor: { line: number; col: number } | undefined;
 
   const fakeBase = {
     focused: true,
     getText: () => ui.editorText,
+    getCursor: () => cursor,
     setText: (text: string) => {
       ui.editorText = text;
     },
@@ -174,6 +178,9 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
     pressRawKey(data: string) {
       rawInputHandler?.(data);
     },
+    setCursor(value: { line: number; col: number } | undefined) {
+      cursor = value;
+    },
     hasRawHandler() {
       return Boolean(rawInputHandler);
     },
@@ -231,6 +238,28 @@ test("the hotkey records, transcribes and inserts at the cursor", async () => {
       h.ui.notifications.some((n) => n.message.includes("已插入")),
       `expected an inserted toast, got: ${h.ui.notifications.map((n) => n.message).join(" | ")}`,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+    h.restore();
+  }
+});
+
+test("a transcript dropped inside a word is padded on both sides", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ text: "hello" }), { status: 200 })) as typeof fetch;
+
+  const h = await harness({ ...CONFIG, keybindMode: "toggle", output: { appendTrailingSpace: true, submitOnStop: false, replacements: {} } });
+  try {
+    h.ui.editorText = "helloworld";
+    h.setCursor({ line: 0, col: 5 });
+    h.pressRawKey("\u0012");
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    h.pressRawKey("\u0012");
+    await waitFor(() => h.ui.inserted.length > 0, "second press transcribes and inserts");
+
+    // Both neighbours are ASCII word characters, so the transcript is separated
+    // on both sides — and the configured trailing space is not doubled.
+    assert.deepEqual(h.ui.inserted, [" hello "]);
   } finally {
     globalThis.fetch = originalFetch;
     h.restore();

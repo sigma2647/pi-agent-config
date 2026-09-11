@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -89,4 +89,24 @@ test("redactConfig never prints a literal key", () => {
   const printed = JSON.stringify(redactConfig(config));
   assert.ok(!printed.includes("sk-secret"));
   assert.ok(printed.includes("<redacted>"));
+});
+
+test("saveConfig leaves no temporary file behind and never truncates the target", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-dictation-atomic-"));
+  const configPath = join(dir, "dictation.json");
+  saveConfig(DEFAULT_CONFIG, configPath);
+  saveConfig({ ...DEFAULT_CONFIG, provider: "groq" }, configPath);
+
+  assert.deepEqual(readdirSync(dir), ["dictation.json"], "no .tmp file survives a successful write");
+  assert.equal(JSON.parse(readFileSync(configPath, "utf8")).provider, "groq");
+
+  // A failed write (unwritable directory) must not damage the existing file.
+  const before = readFileSync(configPath, "utf8");
+  chmodSync(dir, 0o500);
+  try {
+    assert.throws(() => saveConfig({ ...DEFAULT_CONFIG, provider: "deepgram" }, configPath));
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  assert.equal(readFileSync(configPath, "utf8"), before);
 });
