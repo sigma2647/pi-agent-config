@@ -8,6 +8,7 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 
 - Same source serves pi loader and CLI. Do not duplicate logic between `index.ts` and `dev.ts`; share via `chain.ts` / `core.ts`.
 - Relative imports in executable TS files end in `.ts`.
+- Committed `package-lock.json` files resolve to `registry.npmjs.org`; never commit a personal registry mirror host (npm 12 blocks it — see handbook Gotchas).
 - Executable `dev.ts` / standalone `tools/*.ts` shebang: `#!/usr/bin/env -S NODE_USE_ENV_PROXY=1 node --experimental-strip-types --no-warnings`.
 - Extension `index.ts` registers both `pi.registerTool(...)` and `pi.registerCommand(...)` unless intentionally agent-only.
 - Define user-facing options once on the shared core; `index.ts` and `dev.ts` pass the same semantic values through.
