@@ -23,7 +23,7 @@ import {
   saveConfig,
   type DictationConfig,
 } from "./config.ts";
-import { applyReplacements, doctorReport, formatTranscript, micDiagnostics, transcribeFile } from "./core.ts";
+import { applyReplacements, describeLocalModels, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
 import { DEFAULT_LOCAL_MODEL, isStreamingModel, knownModelIds, localModelSpec } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { createStreamingSession, loadStreamingRecognizer, type StreamingSession } from "./local/streaming.ts";
@@ -681,25 +681,18 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     }
 
     if (sub === "use") {
-      const spec = localModelSpec(id);
-      if (!spec) {
-        notify(ctx, `unknown local model "${id}" (known: ${knownModelIds().join(", ")})`, "error");
+      const result = setLocalModel(config, id);
+      if (!result.ok) {
+        if (result.reason === "unknown") {
+          notify(ctx, `unknown local model "${id}" (known: ${knownModelIds().join(", ")})`, "error");
+          return;
+        }
+        notify(ctx, strings.model.missing(id, result.sizeMb), "warning");
         return;
       }
-      if (!modelState(id).ready) {
-        notify(ctx, strings.model.missing(id, spec.sizeMb), "warning");
-        return;
-      }
-      const existing = config.providers.local;
-      config = {
-        ...config,
-        providers: {
-          ...config.providers,
-          local: { type: "local", model: id, language: existing?.type === "local" ? existing.language : "auto" },
-        },
-      };
+      config = result.config;
       saveConfig(config);
-      notify(ctx, strings.command.modelSet(id));
+      notify(ctx, strings.command.modelSet(id, defaultConfigPath()));
       return;
     }
 
@@ -718,10 +711,11 @@ export default async function dictationExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const lines = knownModelIds().map((modelId) => {
-      const spec = localModelSpec(modelId);
-      const modelStatus = modelState(modelId);
-      return `${modelStatus.ready ? "✓" : "✗"} ${modelId} — ${spec?.label ?? ""} · ${spec?.languages ?? ""} · ≈${spec?.sizeMb ?? 0} MB${modelStatus.ready ? "" : ` · ${strings.model.missing(modelId, spec?.sizeMb ?? 0)}`}`;
+    const lines = describeLocalModels(config, "/dictation", {
+      kind: strings.model.kind,
+      active: strings.model.active,
+      notDownloaded: strings.model.notDownloaded,
+      switchHint: strings.model.switchHint,
     });
     notify(ctx, lines.join("\n"));
   };

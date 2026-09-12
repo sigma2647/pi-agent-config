@@ -51,13 +51,20 @@ export type Strings = {
     ready: (id: string) => string;
     deleted: (id: string) => string;
     failed: (detail: string) => string;
+    /** How the two model kinds behave, shown in the model list. */
+    kind: { offline: string; streaming: string };
+    /** Marks the model `providers.local.model` points at. */
+    active: string;
+    notDownloaded: string;
+    /** The list's last line: how to switch models. */
+    switchHint: (command: string) => string;
   };
   command: {
     description: string;
     usage: string;
     status: (state: string, provider: string, keybind: string, configPath: string) => string;
     providerSet: (id: string) => string;
-    modelSet: (id: string) => string;
+    modelSet: (id: string, configPath: string) => string;
     providerList: (lines: string) => string;
     testStarted: (seconds: number) => string;
     testResult: (text: string) => string;
@@ -118,13 +125,17 @@ const zh: Strings = {
     ready: (id) => `本地模型 ${id} 已就绪`,
     deleted: (id) => `已删除本地模型 ${id}`,
     failed: (detail) => `模型操作失败：${detail}`,
+    kind: { offline: "说完再出字", streaming: "边说边出字" },
+    active: "当前使用",
+    notDownloaded: "未下载",
+    switchHint: (command) => `切换：${command} model use <id>（未下载的先 ${command} model download <id>）`,
   },
   command: {
     description: "语音输入：录音、识别、模型与服务管理",
     usage: "用法：/dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|test [秒数]|doctor|mic|config]",
     status: (state, provider, keybind, configPath) => `状态 ${state} · 服务 ${provider} · 快捷键 ${keybind} · 配置 ${configPath}`,
     providerSet: (id) => `语音服务已切换为 ${id}`,
-    modelSet: (id) => `本地模型已切换为 ${id}（只对本次会话有效。要保留：把 providers.local.model 写进 ~/.pi/agent/dictation.json）`,
+    modelSet: (id, configPath) => `本地模型已切换为 ${id}（已写入 ${configPath}，重启 pi 后仍生效）`,
     providerList: (lines) => `语音服务：\n${lines}`,
     testStarted: (seconds) => `测试录音 ${seconds} 秒，识别结果只显示不插入`,
     testResult: (text) => `识别结果：${text}`,
@@ -185,13 +196,17 @@ const en: Strings = {
     ready: (id) => `Local model ${id} is ready`,
     deleted: (id) => `Deleted local model ${id}`,
     failed: (detail) => `Model operation failed: ${detail}`,
+    kind: { offline: "text after you stop", streaming: "live text while you speak" },
+    active: "current",
+    notDownloaded: "not downloaded",
+    switchHint: (command) => `switch: ${command} model use <id> (download first: ${command} model download <id>)`,
   },
   command: {
     description: "Voice input: record, transcribe, manage models and services",
     usage: "Usage: /dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|test [seconds]|doctor|mic|config]",
     status: (state, provider, keybind, configPath) => `state ${state} · service ${provider} · keybind ${keybind} · config ${configPath}`,
     providerSet: (id) => `Speech service switched to ${id}`,
-    modelSet: (id) => `Local model switched to ${id} (this session only — to keep it, set providers.local.model in ~/.pi/agent/dictation.json)`,
+    modelSet: (id, configPath) => `Local model switched to ${id} (saved to ${configPath} — survives a pi restart)`,
     providerList: (lines) => `Speech services:\n${lines}`,
     testStarted: (seconds) => `Test recording for ${seconds}s — the transcript is shown, not inserted`,
     testResult: (text) => `Transcript: ${text}`,

@@ -57,6 +57,8 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 
 `npm run check` 用 `tsconfig.json` 做类型检查。devDependencies 里的 pi 类型包只给检查用：运行时这些模块由 pi 自己提供（它会把 `@earendil-works/*` 和 `typebox` 指向自带的副本），所以本地那几份不会被加载。
 
+模型文件在、但 `sherpa-onnx` 没装时，`/dictation doctor`、`/dictation status` 和转写报错都会写明修复命令，不会等到录完音才失败。
+
 录制的后端需要一个：`ffmpeg`（推荐）、`pw-record`、`arecord` 或 `sox`。模型下载/解压需要系统 `tar` 和 `bzip2`。
 
 ## 本地模型（离线）
@@ -69,13 +71,15 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 | `x-asr-480ms-zh-en-punct` | 中英，**边说边出字**，自带标点 | 127 MB | 约 0.1 RTF，第一批字 0.2 秒 |
 
 ```bash
-/dictation model                          # 查看模型状态
+/dictation model                          # 查看模型状态（会标出哪个在用、怎么切换）
 /dictation model download                 # 下载 SenseVoice Small（约 155 MB，解压后约 385 MB）
 /dictation model download x-asr-480ms-zh-en-punct   # 下载流式模型
-/dictation model use x-asr-480ms-zh-en-punct        # 本次会话切到流式模型
+/dictation model use x-asr-480ms-zh-en-punct        # 切到流式模型
 /dictation model delete                   # 删除模型与压缩包
 /dictation model path                     # 打印模型目录
 ```
+
+命令行里同样的操作：`pi-dictation model`（列出并标出当前模型）、`pi-dictation model use <id>`、`pi-dictation model download <id>`。两个入口的 `model use` 都会写回 `dictation.json`，重启 pi 后仍生效。
 
 - 目录：`~/.pi/agent/dictation-models/<模型 id>/`（可用 `PI_DICTATION_MODELS_DIR` 改）。
 - 语言：SenseVoice 支持 中文 / English / 日本語 / 한국어 / 粤语，自动识别；流式模型支持中英混合。
@@ -89,7 +93,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 - 流式模型比 SenseVoice 略不准（同一个词可能听错），换来的是即时反馈。二者都是约 0.1 RTF。
 - 内存：流式模型加载后常驻约 400 MB（实测 RSS，SenseVoice 约 500 MB），进程退出才释放。
 - 用**流式模型**转写文件时，文件会被当成一段很长的录音送进同一个识别器，结果和实时听写一致。
-- `/dictation model use` / `/dictation provider` 会写回 `dictation.json`。
+- `/dictation model use` / `pi-dictation model use` / `/dictation provider` 会写回 `dictation.json`。
 - `/dictation test 5` 也会显示实时文字，但结果只显示、不插入。
 
 ## 云端服务
@@ -164,6 +168,8 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 ```
 /dictation                状态（当前服务、就绪情况）
 /dictation provider       列出所有服务；/dictation provider local 切换
+/dictation model          列出本地模型（标出当前用的那个 + 切换命令）
+/dictation model use <id> 切换本地模型（如 x-asr-480ms-zh-en-punct 边说边出字）
 /dictation model download 下载本地模型
 /dictation test 5         录 5 秒，只显示识别结果、不插入
 /dictation doctor         自检（录音工具、服务、密钥、模型、配置路径）
@@ -177,7 +183,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 ```bash
 pi-dictation transcribe <file> [--provider local] [--language zh] [--json]
 pi-dictation record [--seconds 10]        # 回车提前结束
-pi-dictation model [status|download|delete|path]
+pi-dictation model [status|download|use|delete|path]
 pi-dictation providers
 pi-dictation doctor
 pi-dictation config

@@ -10,6 +10,7 @@
 import { AUTO_PROVIDER_ORDER, resolveApiKey, type ProviderConfig, type DictationConfig } from "../config.ts";
 import { localModelSpec } from "../local/catalog.ts";
 import { modelState } from "../local/model.ts";
+import { SHERPA_INSTALL_HINT, sherpaRuntimeAvailable } from "../local/sherpa.ts";
 import { createLocalProvider } from "../local/provider.ts";
 import { createDeepgramProvider } from "./deepgram.ts";
 import { endpointNeedsAuth } from "./endpoint.ts";
@@ -35,6 +36,17 @@ export const providerStatus = (id: string, config: ProviderConfig, env: NodeJS.P
       return { id, kind, label: "local", ready: false, detail: `unknown local model "${config.model}" (run /dictation model to list)` };
     }
     const state = modelState(config.model);
+    // Downloaded files are not enough: without the sherpa-onnx package the model
+    // cannot run, and "ready" would only fail after the user finished speaking.
+    if (state.ready && !sherpaRuntimeAvailable()) {
+      return {
+        id,
+        kind,
+        label: `local · ${spec.label}`,
+        ready: false,
+        detail: `model ready (${state.dir}) but the sherpa-onnx runtime is missing — ${SHERPA_INSTALL_HINT}`,
+      };
+    }
     return {
       id,
       kind,

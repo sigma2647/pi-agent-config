@@ -48,12 +48,13 @@ type Harness = {
     inserted: string[];
   };
   shortcuts: Map<string, (ctx: ExtensionContext) => Promise<void> | void>;
-  commands: Set<string>;
+  commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>;
   tools: Set<string>;
   installedEditor: EditorComponent | undefined;
   pressRawKey(data: string): void;
   setCursor(cursor: { line: number; col: number } | undefined): void;
   hasRawHandler(): boolean;
+  runCommand(name: string, args?: string): Promise<void>;
   restore(): void;
 };
 
@@ -72,7 +73,7 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
   Object.assign(process.env, { PI_DICTATION_CONFIG: configPath, PI_DICTATION_MODELS_DIR: modelsDir, PATH: `${binDir}:${previousEnv.PATH ?? ""}` });
 
   const shortcuts = new Map<string, (ctx: ExtensionContext) => Promise<void> | void>();
-  const commands = new Set<string>();
+  const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>();
   const tools = new Set<string>();
   const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
 
@@ -138,8 +139,8 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
     registerShortcut: (shortcut: string, options: { handler: (ctx: ExtensionContext) => Promise<void> | void }) => {
       shortcuts.set(shortcut, options.handler);
     },
-    registerCommand: (name: string) => {
-      commands.add(name);
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }) => {
+      commands.set(name, options);
     },
     registerTool: (toolDefinition: { name: string }) => {
       tools.add(toolDefinition.name);
@@ -184,6 +185,11 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
     hasRawHandler() {
       return Boolean(rawInputHandler);
     },
+    async runCommand(name: string, args = "") {
+      const command = commands.get(name);
+      if (!command) throw new Error(`command "${name}" is not registered`);
+      await command.handler(args, ctx);
+    },
     restore: () => {
       process.env = previousEnv;
     },
@@ -198,6 +204,21 @@ const waitFor = async (predicate: () => boolean, message: string, timeoutMs = 50
   }
   throw new Error(`timed out waiting for: ${message}`);
 };
+
+test("the /dictation model list marks the model in use and names the switch command", async () => {
+  const h = await harness();
+  try {
+    await h.runCommand("dictation", "model");
+    const message = h.ui.notifications.at(-1)?.message ?? "";
+    // The list is the only place that says how to switch, so name what it must contain.
+    // (This harness points at an empty models dir, so both models read as not downloaded.)
+    assert.match(message, /sense-voice-small — .* 说完再出字 · 当前使用/);
+    assert.match(message, /x-asr-480ms-zh-en-punct — .* 边说边出字 · 未下载/);
+    assert.match(message, /切换：\/dictation model use <id>/);
+  } finally {
+    h.restore();
+  }
+});
 
 test("registers the command, the tool, the editor wrapper and the raw key handler", async () => {
   const h = await harness();

@@ -11,6 +11,30 @@
  * place that describes what the upstream package offers.
  */
 
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** The extension directory itself, so the fix hint works wherever the repo lives. */
+const extensionDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Copy-pasteable fix for a missing runtime, shown both by the loader error and
+ * by the readiness checks (so doctor/status say it before a recording is lost). */
+export const SHERPA_INSTALL_HINT = `run: cd ${extensionDir} && npm install`;
+
+/**
+ * Is the `sherpa-onnx` package resolvable? Cheap on purpose: it only resolves
+ * the path, it never loads the WASM module, so status/doctor can call it.
+ */
+export const sherpaRuntimeAvailable = (): boolean => {
+  try {
+    createRequire(import.meta.url).resolve("sherpa-onnx");
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export type {
   SherpaOfflineRecognizer,
   SherpaOfflineStream,
@@ -26,6 +50,6 @@ export const loadSherpa = async (): Promise<SherpaModule> => {
     return await import("sherpa-onnx");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`sherpa-onnx is not installed (${detail}) — run: cd ~/pi-agent-config/extensions/dictation && npm install`);
+    throw new Error(`sherpa-onnx is not installed (${detail}) — ${SHERPA_INSTALL_HINT}`);
   }
 };

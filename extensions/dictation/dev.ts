@@ -4,7 +4,7 @@
  *
  *   pi-dictation transcribe <file> [--provider id] [--language zh] [--json]
  *   pi-dictation record [--seconds N] [--provider id]     (Enter stops early)
- *   pi-dictation model [status|download|delete|path] [id]
+ *   pi-dictation model [status|download|use|delete|path] [id]
  *   pi-dictation providers
  *   pi-dictation doctor
  *   pi-dictation config
@@ -15,10 +15,10 @@
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { createRecorder } from "./audio.ts";
-import { defaultConfigPath, ensureConfigFile, loadConfig, redactConfig, type DictationConfig } from "./config.ts";
-import { doctorReport, formatTranscript, micDiagnostics, transcribeFile } from "./core.ts";
+import { defaultConfigPath, ensureConfigFile, loadConfig, redactConfig, saveConfig, type DictationConfig } from "./config.ts";
+import { describeLocalModels, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
 import { decodeKeyEvents, keytestVerdict, parseKittyFlags, type DecodedKey } from "./keyprobe.ts";
-import { DEFAULT_LOCAL_MODEL, knownModelIds, localModelSpec } from "./local/catalog.ts";
+import { DEFAULT_LOCAL_MODEL, knownModelIds } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { providerStatuses, resolveProvider } from "./providers/index.ts";
 
@@ -64,7 +64,7 @@ const USAGE = `pi-dictation — speech-to-text for pi (local SenseVoice model or
 Usage:
   pi-dictation transcribe <file> [--provider <id>] [--language <code>] [--json]
   pi-dictation record [--seconds <n>] [--provider <id>]
-  pi-dictation model [status|download|delete|path] [<model-id>]
+  pi-dictation model [status|download|use|delete|path] [<model-id>]
   pi-dictation providers
   pi-dictation doctor
   pi-dictation mic                       sample the microphone and list inputs
@@ -90,7 +90,7 @@ const main = async (): Promise<number> => {
     case "record":
       return recordCommand(config, flags);
     case "model":
-      return modelCommand(flags);
+      return modelCommand(config, flags);
     case "providers":
       return providersCommand(config, flags.json);
     case "doctor":
@@ -170,7 +170,7 @@ const recordCommand = async (config: DictationConfig, flags: Flags): Promise<num
   }
 };
 
-const modelCommand = async (flags: Flags): Promise<number> => {
+const modelCommand = async (config: DictationConfig, flags: Flags): Promise<number> => {
   const [sub = "status", id = DEFAULT_LOCAL_MODEL] = flags.positional;
   if (sub === "download") {
     const state = modelState(id);
@@ -184,6 +184,20 @@ const modelCommand = async (flags: Flags): Promise<number> => {
     process.stdout.write(`${id} ready at ${modelState(id).dir}\n`);
     return 0;
   }
+  if (sub === "use") {
+    const result = setLocalModel(config, id);
+    if (!result.ok) {
+      process.stderr.write(
+        result.reason === "unknown"
+          ? `unknown local model "${id}" (known: ${knownModelIds().join(", ")})\n`
+          : `${id} is not downloaded (~${result.sizeMb} MB) — run: pi-dictation model download ${id}\n`,
+      );
+      return 1;
+    }
+    saveConfig(result.config);
+    process.stdout.write(`${id} is now the local model (saved to ${defaultConfigPath()})\n`);
+    return 0;
+  }
   if (sub === "delete") {
     const { removed } = await deleteModel(id);
     process.stdout.write(removed.length ? `removed:\n${removed.join("\n")}\n` : `${id} is not downloaded\n`);
@@ -193,11 +207,19 @@ const modelCommand = async (flags: Flags): Promise<number> => {
     process.stdout.write(`${modelState(id).dir}\n`);
     return 0;
   }
-  for (const modelId of knownModelIds()) {
-    const spec = localModelSpec(modelId);
-    const state = modelState(modelId);
-    process.stdout.write(`${state.ready ? "✓" : "✗"} ${modelId} — ${spec?.label ?? ""} · ${spec?.languages ?? ""} · ≈${spec?.sizeMb ?? 0} MB\n  ${state.dir}\n`);
-  }
+  process.stdout.write(
+    `${describeLocalModels(
+      config,
+      "pi-dictation",
+      {
+        kind: { offline: "text after you stop", streaming: "live text while you speak" },
+        active: "current",
+        notDownloaded: "not downloaded",
+        switchHint: (command) => `switch: ${command} model use <id> (download first: ${command} model download <id>)`,
+      },
+      { dirs: true },
+    ).join("\n")}\n`,
+  );
   return 0;
 };
 

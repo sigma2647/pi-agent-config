@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, type DictationConfig } from "../config.ts";
-import { applyReplacements, doctorReport, formatTranscript, isTooShortForCloud, transcribeFile } from "../core.ts";
+import { applyReplacements, describeLocalModels, doctorReport, formatTranscript, isTooShortForCloud, setLocalModel, transcribeFile } from "../core.ts";
 import { wavHeader } from "../audio.ts";
 import { isPcm16Wav } from "../wav.ts";
 import { providerStatus, resolveProvider } from "../providers/index.ts";
@@ -73,6 +73,56 @@ test("providerStatus rejects a non-loopback http endpoint", () => {
   assert.equal(status.ready, false);
   assert.match(status.detail, /HTTPS/);
 });
+
+test("describeLocalModels marks the model in use, the missing one, and how to switch", () =>
+  withFakeLocalModel(() => {
+    const config = configWith({ providers: { local: { type: "local", model: "sense-voice-small", language: "zh" } } });
+    const lines = describeLocalModels(config, "/dictation", {
+      kind: { offline: "OFFLINE", streaming: "STREAMING" },
+      active: "ACTIVE",
+      notDownloaded: "MISSING",
+      switchHint: (command) => `switch via ${command} model use`,
+    });
+
+    const [downloaded, absent, hint] = lines;
+    assert.match(downloaded ?? "", /^✓ sense-voice-small — .* OFFLINE · ACTIVE$/);
+    assert.doesNotMatch(downloaded ?? "", /MISSING/);
+    assert.match(absent ?? "", /^✗ x-asr-480ms-zh-en-punct — .* STREAMING · MISSING$/);
+    assert.doesNotMatch(absent ?? "", /ACTIVE/);
+    assert.equal(hint, "switch via /dictation model use");
+  }));
+
+test("describeLocalModels names the caller's own command, so both lists stay runnable", () => {
+  const lines = describeLocalModels(configWith({ providers: {} }), "pi-dictation", {
+    kind: { offline: "a", streaming: "b" },
+    active: "c",
+    notDownloaded: "d",
+    switchHint: (command) => `${command} model use <id>`,
+  });
+  assert.equal(lines.at(-1), "pi-dictation model use <id>");
+});
+
+test("setLocalModel refuses an unknown id and a model that is not downloaded", () => {
+  const config = configWith({ providers: { local: { type: "local", model: "sense-voice-small", language: "auto" } } });
+  const unknown = setLocalModel(config, "no-such-model");
+  assert.deepEqual(unknown, { ok: false, reason: "unknown", id: "no-such-model", sizeMb: 0 });
+
+  const missing = setLocalModel(config, "x-asr-480ms-zh-en-punct");
+  assert.equal(missing.ok, false);
+  assert.equal(missing.ok === false && missing.reason, "missing");
+  assert.equal(missing.ok === false && missing.sizeMb > 0, true);
+});
+
+test("setLocalModel switches the model and keeps the configured language", () =>
+  withFakeLocalModel(() => {
+    const config = configWith({ providers: { local: { type: "local", model: "x-asr-480ms-zh-en-punct", language: "zh" } } });
+    const result = setLocalModel(config, "sense-voice-small");
+    assert.equal(result.ok, true);
+    const local = result.ok ? result.config.providers.local : undefined;
+    assert.deepEqual(local, { type: "local", model: "sense-voice-small", language: "zh" });
+    // The original config must not be mutated by the returned switch.
+    assert.equal(config.providers.local?.type === "local" && config.providers.local.model, "x-asr-480ms-zh-en-punct");
+  }));
 
 test("resolveProvider honours an explicit provider choice", () => {
   const config = configWith({ provider: "openai" });

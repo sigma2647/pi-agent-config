@@ -11,11 +11,11 @@ import { existsSync, readFileSync } from "node:fs";
 import type { OutputConfig, DictationConfig } from "./config.ts";
 import { defaultConfigPath } from "./config.ts";
 import { detectRecorderTool } from "./audio.ts";
-import { localModelSpec, modelsRoot } from "./local/catalog.ts";
+import { modelsRoot, knownModelIds, localModelSpec, type LocalModelSpec } from "./local/catalog.ts";
 import { modelState } from "./local/model.ts";
 import { describeSilence, probeMic } from "./mic.ts";
 import { SILENCE_MAX_AMPLITUDE, isPcm16Wav, pcm16DurationMs } from "./wav.ts";
-import { createProvider, providerStatuses, resolveProvider } from "./providers/index.ts";
+import { createProvider, providerStatus, providerStatuses, resolveProvider } from "./providers/index.ts";
 import type { SttProvider } from "./providers/types.ts";
 
 export const TRANSCRIBE_TIMEOUT_MS = Number.parseInt(process.env.PI_DICTATION_TIMEOUT_MS ?? "", 10) || 90_000;
@@ -53,6 +53,110 @@ export type TranscribeOutcome = {
   providerLabel: string;
 };
 
+export type LocalModelRow = {
+  id: string;
+  label: string;
+  languages: string;
+  sizeMb: number;
+  /** `offline` decodes after you stop, `streaming` writes text while you speak. */
+  kind: LocalModelSpec["kind"];
+  ready: boolean;
+  /** The model `providers.local.model` points at right now. */
+  active: boolean;
+  dir: string;
+};
+
+/**
+ * The one place that answers "which local models exist, which is downloaded,
+ * which one is in use" — the list and the switch command both read it, so the
+ * pi command and the CLI cannot disagree.
+ */
+export const localModelRows = (config: DictationConfig): LocalModelRow[] => {
+  const configured = config.providers.local;
+  const activeId = configured?.type === "local" ? configured.model : undefined;
+  return knownModelIds().map((id) => {
+    const spec = localModelSpec(id)!;
+    const state = modelState(id);
+    return {
+      id,
+      label: spec.label,
+      languages: spec.languages,
+      sizeMb: spec.sizeMb,
+      kind: spec.kind,
+      ready: state.ready,
+      active: id === activeId,
+      dir: state.dir,
+    };
+  });
+};
+
+/**
+ * The words a model list needs. Each entry point supplies its own locale, but
+ * the layout below is written once, so the two lists cannot drift apart.
+ */
+export type LocalModelWords = {
+  kind: Record<LocalModelRow["kind"], string>;
+  active: string;
+  notDownloaded: string;
+  /** The switch line — the whole point of the list: how do I pick the other one? */
+  switchHint: (command: string) => string;
+};
+
+/** Model list lines, ready to print. `command` is `/dictation` or `pi-dictation`. */
+export const describeLocalModels = (
+  config: DictationConfig,
+  command: string,
+  words: LocalModelWords,
+  options: { dirs?: boolean } = {},
+): string[] => {
+  const lines = localModelRows(config).map((row) => {
+    const parts = [row.ready ? "✓" : "✗", `${row.id} — ${row.label} · ${row.languages} · ≈${row.sizeMb} MB`, `· ${words.kind[row.kind]}`];
+    if (row.active) parts.push(`· ${words.active}`);
+    if (!row.ready) parts.push(`· ${words.notDownloaded}`);
+    const line = parts.join(" ");
+    return options.dirs ? `${line}\n  ${row.dir}` : line;
+  });
+  lines.push(words.switchHint(command));
+  return lines;
+};
+
+export type SetLocalModelResult =
+  | { ok: true; config: DictationConfig }
+  | { ok: false; reason: "unknown" | "missing"; id: string; sizeMb: number };
+
+/**
+ * Point `providers.local.model` at another downloaded model. Returns the new
+ * config instead of saving it, so each entry point reports and persists the
+ * switch in its own way (and the decision stays testable without touching disk).
+ */
+export const setLocalModel = (config: DictationConfig, id: string): SetLocalModelResult => {
+  const spec = localModelSpec(id);
+  if (!spec) return { ok: false, reason: "unknown", id, sizeMb: 0 };
+  if (!modelState(id).ready) return { ok: false, reason: "missing", id, sizeMb: spec.sizeMb };
+  const existing = config.providers.local;
+  return {
+    ok: true,
+    config: {
+      ...config,
+      providers: {
+        ...config.providers,
+        local: { type: "local", model: id, language: existing?.type === "local" ? existing.language : "auto" },
+      },
+    },
+  };
+};
+
+/**
+ * Why the chosen service cannot run, phrased as the fix. An explicitly named
+ * provider reports its own reason (a missing API key, a missing model, a
+ * missing runtime); "auto" keeps the two generic next actions.
+ */
+const notReadyHint = (config: DictationConfig, env: NodeJS.ProcessEnv): string => {
+  const named = config.provider === "auto" ? undefined : config.providers[config.provider];
+  if (named) return providerStatus(config.provider, named, env).detail;
+  return `run /dictation doctor, then either "/dictation model download" or set an API key`;
+};
+
 export const transcribeFile = async (options: TranscribeOptions): Promise<TranscribeOutcome> => {
   const env = options.env ?? process.env;
   const config = options.providerId
@@ -61,9 +165,7 @@ export const transcribeFile = async (options: TranscribeOptions): Promise<Transc
 
   const resolved = resolveProvider(config, env);
   if (!resolved) {
-    throw new Error(
-      `no speech service is ready (provider: ${config.provider}). Run /dictation doctor, then either "/dictation model download" or set an API key.`,
-    );
+    throw new Error(`no speech service is ready (provider: ${config.provider}) — ${notReadyHint(config, env)}`);
   }
 
   const provider: SttProvider = createProvider(resolved.id, resolved.config, env);
@@ -139,15 +241,10 @@ export const doctorReport = (config: DictationConfig, env: NodeJS.ProcessEnv = p
     });
   }
 
-  for (const id of Object.keys(config.providers)) {
-    const providerConfig = config.providers[id];
+  for (const [id, providerConfig] of Object.entries(config.providers)) {
     if (providerConfig?.type !== "local") continue;
-    const spec = localModelSpec(providerConfig.model);
-    const state = modelState(providerConfig.model);
-    lines.push({
-      level: state.ready ? "ok" : "warn",
-      text: `local model ${providerConfig.model}: ${state.ready ? `ready (${state.dir})` : spec ? `missing — /dictation model download (≈${spec.sizeMb} MB)` : "unknown model id"}`,
-    });
+    const status = providerStatus(id, providerConfig, env);
+    lines.push({ level: status.ready ? "ok" : "warn", text: `local model ${providerConfig.model}: ${status.detail}` });
   }
 
   const configPath = process.env.PI_DICTATION_CONFIG?.trim() || defaultConfigPath();

@@ -50,7 +50,7 @@ export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
   "x-asr-480ms-zh-en-punct": {
     id: "x-asr-480ms-zh-en-punct",
     label: "X-ASR streaming 480ms (int8, 含标点)",
-    languages: "中文 / English（边说边出字）",
+    languages: "中文 / English",
     sizeMb: 127,
     url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2",
     files: ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "tokens.txt"],
