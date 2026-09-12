@@ -20,7 +20,7 @@ Esc（录音中）    取消，不留文字
 | 值 | 行为 | 说明 |
 |---|---|---|
 | `toggle`（默认） | 按一下开始，再按一下结束 | 任何终端都可用 |
-| `hold` | 按住说话，松开结束 | 需要终端上报「按键松开」事件（Kitty 键盘协议）。ghostty 直接跑 pi 可以；**经过 tmux / herdr 等复用器时松开事件会被吞掉**。不支持时第一次「再按一下」会自动降级为 `toggle` 并提示一次 |
+| `hold` | 按住说话，松开结束 | 需要终端上报「按键松开」事件（Kitty 键盘协议）。ghostty 直接跑 pi 可以；herdr 的 pane 也转发（它自己会向上层申请，并按每个 pane 的标志重新编码；用 `pi-dictation keytest` 确认）；**tmux 会吞掉松开事件，即使开了 `extended-keys on csi-u`**。不支持时第一次「再按一下」会自动降级为 `toggle` 并提示一次 |
 
 两种模式都忽略**按住不放产生的重复按键**，所以长按不会误停。
 
@@ -45,6 +45,7 @@ pi-dictation keytest        # 按几次 ctrl+r（含一次按住再松开），�
 | `local/` | 本地模型：`catalog.ts` 模型清单、`model.ts` 下载/删除、`sherpa.ts` 运行时、`provider.ts` 离线识别、`streaming.ts` 边说边出字 |
 | `ui.ts` | 边框标签、音量条、按键拦截 |
 | `keyprobe.ts` | 解码终端按键事件（判断是否支持「松开」），供 `pi-dictation keytest` 用 |
+| `docs/asr-model-selection.md` | 语音识别模型候选清单与选型分析（本地 + 云端），供后续选型用 |
 
 新增一个云端服务：写 `providers/<名字>.ts`，在 `providers/index.ts` 的 `createProvider` 加一个分支即可，其他文件不用改。
 
@@ -134,7 +135,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 {
   "locale": "zh",
   "keybind": "ctrl+r",
-  "keybindMode": "hold",
+  "keybindMode": "toggle",
   "provider": "auto",
   "providers": {
     "local": { "type": "local", "model": "sense-voice-small", "language": "auto" }
@@ -160,7 +161,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 - `output.replacements`：识别结果里的固定错词替换（大小写不敏感；含中文时不做词边界限制）。
 - `capture.device`：`auto`/空＝默认设备；Linux 用 PulseAudio 源名，macOS 用 `:0`/`:1`，Windows 用设备名或 `default`。
 - `locale`：`zh`（默认）或 `en`。修改 `keybind`/`locale` 后需要 `/reload` 或重启 pi。
-- `keybindMode` 默认 `hold`（按住说话）；改成 `toggle` 就是按一下开始、再按一下结束。
+- `keybindMode` 默认 `toggle`（按一下开始，再按一下结束）；改成 `hold` 就是按住说话、松开结束（见上面的按键模式表）。
 - `keybind` 默认 `ctrl+r`（与 pi 内置的「重命名会话」冲突，本扩展优先；想消掉启动提示见下文排查表）。
 
 ## 在 pi 里
