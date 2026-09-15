@@ -48,7 +48,13 @@ type Harness = {
     inserted: string[];
   };
   shortcuts: Map<string, (ctx: ExtensionContext) => Promise<void> | void>;
-  commands: Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>;
+  commands: Map<
+    string,
+    {
+      handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+      getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string; description?: string }> | null;
+    }
+  >;
   tools: Set<string>;
   installedEditor: EditorComponent | undefined;
   pressRawKey(data: string): void;
@@ -80,7 +86,13 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
   }
 
   const shortcuts = new Map<string, (ctx: ExtensionContext) => Promise<void> | void>();
-  const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>();
+  const commands = new Map<
+    string,
+    {
+      handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+      getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string; description?: string }> | null;
+    }
+  >();
   const tools = new Set<string>();
   const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
 
@@ -146,7 +158,13 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
     registerShortcut: (shortcut: string, options: { handler: (ctx: ExtensionContext) => Promise<void> | void }) => {
       shortcuts.set(shortcut, options.handler);
     },
-    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }) => {
+    registerCommand: (
+      name: string,
+      options: {
+        handler: (args: string, ctx: ExtensionContext) => Promise<void> | void;
+        getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string; description?: string }> | null;
+      },
+    ) => {
       commands.set(name, options);
     },
     registerTool: (toolDefinition: { name: string }) => {
@@ -229,10 +247,33 @@ test("the /dictation model list marks the model in use and names the switch comm
     // (This harness points at an empty models dir, so every model reads as not downloaded.
     // The active marker says "配置": the model is what the config points at, not
     // a promise that it is usable right now.)
-    assert.match(message, /[✓✗] sense-voice-small · [^·]+ · 说完再出字 · 未下载 ≈\d+ MB · ← 当前配置/);
-    assert.match(message, /✗ x-asr-480ms-zh-en-punct · [^·]+ · 边说边出字 · 未下载 ≈\d+ MB/);
+    assert.match(message, /[✓✗] sense-voice-small ← 当前配置\n\s+[^·]+ · 说完再出字 · 未下载 ≈\d+ MB/);
+    assert.match(message, /✗ x-asr-480ms-zh-en-punct\n\s+[^·]+ · 边说边出字 · 未下载 ≈\d+ MB/);
     assert.match(message, /切换：\/dictation model use <id>/);
     assert.match(message, /未下载的先 \/dictation model download <id>/);
+  } finally {
+    h.restore();
+  }
+});
+
+test("the /dictation argument completion walks action → argument", async () => {
+  const h = await harness();
+  try {
+    const complete = h.commands.get("dictation")?.getArgumentCompletions;
+    assert.ok(complete, "the command exposes argument completions");
+    const values = (prefix: string) => (complete(prefix) ?? []).map((item) => item.value);
+
+    assert.deepEqual(values("mo"), ["model", "mode"]);
+    assert.deepEqual(values("model "), ["model use", "model download", "model delete", "model path"]);
+    assert.ok(values("model use ").includes("model use sense-voice-small"), "the model ids come from the catalog");
+    assert.ok(
+      values("model use sense-voice-small").includes("model use sense-voice-small"),
+      "a half-typed id still completes to the whole argument",
+    );
+    assert.ok(values("model use sense").includes("model use sense-voice-small"));
+    assert.deepEqual(values("mode "), ["mode hold", "mode toggle"]);
+    assert.ok(values("provider ").includes("provider localserver"), "provider ids come from the config, plus auto");
+    assert.deepEqual(complete("nonsense "), null, "an unknown action proposes nothing");
   } finally {
     h.restore();
   }

@@ -122,13 +122,15 @@ export const describeLocalModels = (
   options: { dirs?: boolean } = {},
 ): string[] => {
   const lines = localModelRows(config).map((row) => {
-    // Short on purpose: the list is read in a 80-column terminal, and the id is
-    // the only part that gets typed. Long descriptions live in the README.
-    const parts = [`${row.ready ? "✓" : "✗"} ${row.id}`, row.languages, words.kind[row.kind]];
-    if (!row.ready) parts.push(`${words.notDownloaded} ≈${row.sizeMb} MB`);
-    if (row.active) parts.push(words.active);
-    const line = parts.join(" · ");
-    return options.dirs ? `${line}\n  ${row.dir}` : line;
+    // Two lines per model, so nothing wraps in an 80-column terminal: the id and
+    // the state on the first line, the description on the second. The id is the
+    // only part that gets typed; long descriptions live in the README.
+    const head = `${row.ready ? "✓" : "✗"} ${row.id}${row.active ? ` ${words.active}` : ""}`;
+    const detail = [row.languages, words.kind[row.kind]];
+    if (!row.ready) detail.push(`${words.notDownloaded} ≈${row.sizeMb} MB`);
+    const block = [head, `  ${detail.join(" · ")}`];
+    if (options.dirs) block.push(`  ${row.dir}`);
+    return block.join("\n");
   });
   lines.push(words.switchHint(command));
   return lines;

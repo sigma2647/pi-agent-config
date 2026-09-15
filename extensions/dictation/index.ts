@@ -12,19 +12,20 @@
  */
 
 import type { ExtensionAPI, ExtensionContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import type { EditorComponent, KeyId, TUI } from "@earendil-works/pi-tui";
+import type { AutocompleteItem, EditorComponent, KeyId, TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createRecorder, detectRecorderTool, type RecordHandle } from "./audio.ts";
 import {
   defaultConfigPath,
   ensureConfigFile,
   isKeybindMode,
+  KEYBIND_MODES,
   loadConfig,
   redactConfig,
   saveConfig,
   type DictationConfig,
 } from "./config.ts";
-import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, notReadyHint, setLocalModel, transcribeFile } from "./core.ts";
+import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, localModelRows, micDiagnostics, notReadyHint, setLocalModel, transcribeFile } from "./core.ts";
 import { DEFAULT_LOCAL_MODEL, isStreamingModel, knownModelIds, localModelSpec } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { createStreamingSession, loadStreamingRecognizer, type StreamingSession } from "./local/streaming.ts";
@@ -125,7 +126,9 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   let draft: LiveDraft | undefined;
 
   const notify = (ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void => {
-    if (ctx?.hasUI) ctx.ui.notify(`${strings.product}: ${message}`, type);
+    // The product name owns its own line: it is a label, not the first item of the
+    // message, and multi-line lists (models, providers) read as a block under it.
+    if (ctx?.hasUI) ctx.ui.notify(`${strings.product}:\n${message}`, type);
     else if (type === "error") console.error(`${strings.product}: ${message}`);
   };
 
@@ -477,14 +480,50 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   // every start. The key is consumed earlier instead, in `onTerminalInput`
   // (see session_start), which also wins over the built-in binding.
 
+  const ACTIONS = ["start", "stop", "send", "cancel", "status", "provider", "model", "mode", "test", "mic", "doctor", "config"];
+  const MODEL_ACTIONS = ["use", "download", "delete", "path"];
+
+  /**
+   * Argument completion for `/dictation ...`. pi hands over everything typed
+   * after the command name and replaces that whole text with the chosen value,
+   * so each item's value is the full argument (`model use <id>`), not just the
+   * last word. The finished words decide what the next one can be.
+   */
+  const argumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+    const words = prefix.trim() ? prefix.trim().split(/\s+/) : [];
+    const done = prefix.endsWith(" ") ? words : words.slice(0, -1);
+    const current = (prefix.endsWith(" ") ? "" : words.at(-1) ?? "").toLowerCase();
+    const pick = (options: readonly string[], describe?: (value: string) => string | undefined): AutocompleteItem[] | null => {
+      const items = options
+        .filter((option) => option.toLowerCase().startsWith(current))
+        .map((option) => {
+          const description = describe?.(option);
+          return { value: [...done, option].join(" "), label: option, ...(description ? { description } : {}) };
+        });
+      return items.length > 0 ? items : null;
+    };
+
+    if (done.length === 0) return pick(ACTIONS);
+    if (done.length === 1) {
+      if (done[0] === "model") return pick(MODEL_ACTIONS);
+      if (done[0] === "provider") return pick(["auto", ...Object.keys(config.providers)]);
+      if (done[0] === "mode") return pick(KEYBIND_MODES);
+      return null;
+    }
+    if (done.length === 2 && done[0] === "model" && MODEL_ACTIONS.includes(done[1] ?? "")) {
+      // Say what each model is, so the picker does not need the list above it.
+      const rows = new Map(localModelRows(config).map((row) => [row.id, row]));
+      return pick(knownModelIds(), (id) => {
+        const row = rows.get(id);
+        return row ? `${row.languages} · ${strings.model.kind[row.kind]}${row.active ? ` ${strings.model.active}` : ""}` : undefined;
+      });
+    }
+    return null;
+  };
+
   pi.registerCommand("dictation", {
     description: `${strings.product} — ${strings.command.description}`,
-    getArgumentCompletions: (prefix) => {
-      const commands = ["start", "stop", "send", "cancel", "status", "provider", "model", "mode", "test", "mic", "doctor", "config"];
-      return commands
-        .filter((command) => command.startsWith(prefix.trim().toLowerCase()))
-        .map((command) => ({ value: command, label: command }));
-    },
+    getArgumentCompletions: argumentCompletions,
     handler: async (args, ctx) => {
       const [action = "status", ...rest] = args.trim().split(/\s+/).filter(Boolean);
       const param = rest.join(" ").trim();

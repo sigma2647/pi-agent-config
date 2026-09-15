@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DEFAULT_LOCAL_MODEL } from "./local/catalog.ts";
 
 export type Locale = "zh" | "en";
 
@@ -101,7 +102,7 @@ export const DEFAULT_CONFIG: DictationConfig = {
   keybindMode: "hold",
   provider: "auto",
   providers: {
-    local: { type: "local", model: "sense-voice-small", language: "auto" },
+    local: { type: "local", model: DEFAULT_LOCAL_MODEL, language: "auto" },
     openai: {
       type: "openai-compatible",
       endpoint: "https://api.openai.com/v1/audio/transcriptions",

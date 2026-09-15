@@ -91,13 +91,13 @@ test("describeLocalModels marks the model in use, the missing one, and how to sw
     const models = lines.slice(0, -1);
     const active = models.filter((line) => line.includes("ACTIVE"));
     assert.equal(active.length, 1, "exactly one model is marked as in use");
-    // The line stays short: id, languages, capability, state — no label, no size
+    // Two lines per model: id plus state, then languages and capability. No size
     // for a model that is already on disk.
-    assert.match(active[0] ?? "", /^✓ sense-voice-small · [^·]+ · OFFLINE · ACTIVE$/);
+    assert.match(active[0] ?? "", /^✓ sense-voice-small ACTIVE\n {2}[^·]+ · OFFLINE$/);
     assert.doesNotMatch(active[0] ?? "", /MISSING/);
     assert.doesNotMatch(active[0] ?? "", /MB/, "no download size for a model that is already there");
     assert.ok(
-      models.some((line) => /^✗ x-asr-480ms-zh-en-punct · [^·]+ · STREAMING · MISSING ≈\d+ MB$/.test(line)),
+      models.some((line) => /^✗ x-asr-480ms-zh-en-punct\n {2}[^·]+ · STREAMING · MISSING ≈\d+ MB$/.test(line)),
       `the streaming model is listed as not downloaded: ${models.join(" | ")}`,
     );
     assert.equal(hint, "switch via /dictation model use");
