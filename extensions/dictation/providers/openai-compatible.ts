@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { resolveApiKey, type OpenAICompatibleProviderConfig } from "../config.ts";
 import { assertEndpoint, describeHttpFailure, endpointNeedsAuth } from "./endpoint.ts";
-import { normalizeLanguage, truncate, type SttProvider } from "./types.ts";
+import { normalizeLanguage, truncate, type Backend, type SttProvider } from "./types.ts";
 
 export const createOpenAiCompatibleProvider = (
   id: string,
@@ -79,4 +79,38 @@ export const readBody = async (response: Response): Promise<string> => {
 export const rethrowAbort = (error: unknown): never => {
   if (error instanceof Error && error.name === "AbortError") throw new Error("transcription timed out or was cancelled");
   throw error;
+};
+
+/**
+ * The backend descriptor for the registry. A loopback endpoint counts as ready
+ * without a key, which is what makes a local server (whisper.cpp, faster-whisper,
+ * qwen3-asr, sherpa-onnx) a one-line config entry instead of new code.
+ */
+export const openAiCompatibleBackend: Backend<OpenAICompatibleProviderConfig> = {
+  create: createOpenAiCompatibleProvider,
+  status: (id, config, env) => {
+    let local = false;
+    try {
+      local = !endpointNeedsAuth(config.endpoint);
+    } catch (error) {
+      return {
+        id,
+        kind: "cloud",
+        label: "openai-compatible",
+        ready: false,
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (local) {
+      return { id, kind: "cloud", label: `openai-compatible · ${config.model}`, ready: true, detail: `local endpoint ${config.endpoint} (no key needed)` };
+    }
+    const { key, source } = resolveApiKey(config, env);
+    return {
+      id,
+      kind: "cloud",
+      label: `openai-compatible · ${config.model}`,
+      ready: Boolean(key),
+      detail: key ? `${config.endpoint} (key from ${source})` : `${config.endpoint} — set ${config.apiKeyEnv || "apiKey"}`,
+    };
+  },
 };

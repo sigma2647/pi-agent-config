@@ -1,6 +1,10 @@
 /**
- * Local (offline) model catalog — the single place that knows which files a
- * model needs, where it comes from, and how big it is.
+ * Local (offline) model catalog — the single place that knows which model
+ * exists, which files it consists of, where it comes from, and how big it is.
+ *
+ * An entry here is data only. The code that turns those files into a recognizer
+ * lives in the family named by `family`, one file per family in
+ * `local/families/`.
  */
 
 import { homedir } from "node:os";
@@ -14,47 +18,71 @@ export type LocalModelSpec = {
   /** Approximate download size (archive), used for progress and prompts. */
   sizeMb: number;
   url: string;
-  /** Files that must exist in the model directory for it to count as ready. */
-  files: string[];
-  /** Token table handed to sherpa-onnx. */
-  tokens: string;
   /**
    * `offline` decodes a finished recording in one pass; `streaming` emits
    * partial text while the user is still speaking and never sees the whole
    * recording at once.
    */
   kind: "offline" | "streaming";
+  /** Which sherpa-onnx family reads these files. Missing means `sense-voice`. */
+  family?: "sense-voice" | "fire-red-asr-ctc" | "streaming-zipformer";
   /** Offline weights (`kind: "offline"`). */
   weights?: string;
   /** Streaming transducer parts (`kind: "streaming"`). */
   encoder?: string;
   decoder?: string;
   joiner?: string;
+  /** Token table handed to sherpa-onnx. */
+  tokens?: string;
+  /**
+   * Longest recording this model survives in the local runtime, in seconds.
+   * Some families abort the whole WebAssembly module on longer input, so the
+   * provider refuses the recording up front instead of dying mid-decode.
+   * Missing means "no measured limit".
+   */
+  maxSeconds?: number;
 };
 
 export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
   "sense-voice-small": {
     id: "sense-voice-small",
     label: "SenseVoice Small (int8)",
-    languages: "中文 / English / 日本語 / 한국어 / 粤语",
+    languages: "中英日韩粤",
     sizeMb: 155,
     url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
-    files: ["model.int8.onnx", "tokens.txt"],
     kind: "offline",
+    family: "sense-voice",
     weights: "model.int8.onnx",
     tokens: "tokens.txt",
   },
+  // The most accurate Chinese offline model here: the CTC branch of FireRedASR2,
+  // which is also the faster of the two FireRedASR2 exports. No punctuation in
+  // the output (unlike SenseVoice) and no live partial text.
+  "fire-red-asr2-ctc-zh-en": {
+    id: "fire-red-asr2-ctc-zh-en",
+    label: "FireRedASR2-CTC (int8)",
+    languages: "中文（含方言）",
+    sizeMb: 496,
+    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-ctc-zh_en-int8-2026-02-25.tar.bz2",
+    kind: "offline",
+    family: "fire-red-asr-ctc",
+    weights: "model.int8.onnx",
+    tokens: "tokens.txt",
+    // Measured: 60 s decodes, 90 s aborts the WebAssembly module (memory), so
+    // this is the highest round number known to work.
+    maxSeconds: 60,
+  },
   // A streaming zipformer: the words appear while you speak, instead of after
-  // you stop. Slightly less accurate than SenseVoice on the same audio, but it
-  // is the only local option that can show a partial transcript.
+  // you stop. Accurate on long speech, clearly weaker on a short utterance
+  // (measured, see docs/asr-model-selection.md).
   "x-asr-480ms-zh-en-punct": {
     id: "x-asr-480ms-zh-en-punct",
     label: "X-ASR streaming 480ms (int8, 含标点)",
-    languages: "中文 / English",
+    languages: "中英",
     sizeMb: 127,
     url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2",
-    files: ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "tokens.txt"],
     kind: "streaming",
+    family: "streaming-zipformer",
     encoder: "encoder.int8.onnx",
     decoder: "decoder.onnx",
     joiner: "joiner.int8.onnx",

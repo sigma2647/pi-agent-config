@@ -1,19 +1,20 @@
 /**
  * Offline local provider.
  *
- * Two shapes of local model, one provider id:
- *   - `sense-voice-small` (offline): decode the finished recording in one pass.
- *   - `x-asr-480ms-zh-en-punct` (streaming): the interactive extension feeds
- *     audio while recording, so by the time the user stops, the text is already
- *     there. When a *file* is transcribed through a streaming model, this module
- *     replays the file through the same streaming session.
+ * Two shapes of local model, one provider id, and one family module per shape:
+ *   - offline (SenseVoice, FireRedASR2-CTC): decode the finished recording in
+ *     one pass.
+ *   - streaming (x-asr zipformer): the interactive extension feeds audio while
+ *     recording, so by the time the user stops, the text is already there. When
+ *     a *file* is transcribed through a streaming model, this module replays
+ *     the file through the same streaming session.
  *
  * Nothing here touches the network, so this provider works with no key and no
  * server.
  */
 
-import { join } from "node:path";
 import { localModelSpec, modelDir, type LocalModelSpec } from "./catalog.ts";
+import { localFamily } from "./families/index.ts";
 import { modelState } from "./model.ts";
 import { createStreamingSession } from "./streaming.ts";
 import { loadSherpa, type SherpaModule, type SherpaOfflineRecognizer, type SherpaOfflineStream, type SherpaWave } from "./sherpa.ts";
@@ -35,14 +36,12 @@ export const loadRecognizer = async (modelId: string, sherpa?: SherpaModule): Pr
 
     const runtime = sherpa ?? (await loadSherpa());
     const dir = modelDir(modelId);
+    const family = localFamily(spec);
+    const modelConfig = family.offline?.(spec, dir);
+    if (!modelConfig) throw new Error(`local model ${modelId} cannot decode a finished recording (family "${family.id}" only streams)`);
     return runtime.createOfflineRecognizer({
       modelConfig: {
-        senseVoice: {
-          model: join(dir, spec.weights ?? "model.int8.onnx"),
-          language: "",
-          useInverseTextNormalization: 1,
-        },
-        tokens: join(dir, spec.tokens),
+        ...modelConfig,
         numThreads: 1,
         provider: "cpu",
         debug: 0,
@@ -77,6 +76,7 @@ export const createLocalProvider = (
     let stream: SherpaOfflineStream | undefined;
     try {
       const wave = readWave(runtime, input.audioPath);
+      assertWithinLimit(spec, wave);
       stream = recognizer.createStream();
       stream.acceptWaveform(wave.sampleRate, wave.samples);
       recognizer.decode(stream);
@@ -110,6 +110,21 @@ export const readWave = (runtime: SherpaModule, audioPath: string): SherpaWave =
   const wave = runtime.readWave(audioPath);
   if (!wave || !wave.samples || wave.samples.length === 0) throw new Error("the recording is empty");
   return wave;
+};
+
+/**
+ * Some families abort the whole WebAssembly runtime on long input (FireRedASR2
+ * CTC above about 90 s, measured). Refusing up front keeps the process alive and
+ * tells the user what to do instead of losing the transcription to a crash.
+ */
+const assertWithinLimit = (spec: LocalModelSpec, wave: SherpaWave): void => {
+  const limit = spec.maxSeconds;
+  if (!limit) return;
+  const seconds = wave.samples.length / wave.sampleRate;
+  if (seconds <= limit) return;
+  throw new Error(
+    `${spec.label} cannot decode more than ${limit}s in one piece (this recording is ${seconds.toFixed(0)}s) — record a shorter clip, or switch model with /dictation model use`,
+  );
 };
 
 const readText = (result: { text?: string } | undefined): string => (typeof result?.text === "string" ? result.text.trim() : "");

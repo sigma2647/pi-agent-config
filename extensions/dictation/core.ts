@@ -100,6 +100,18 @@ export type LocalModelWords = {
   notDownloaded: string;
   /** The switch line — the whole point of the list: how do I pick the other one? */
   switchHint: (command: string) => string;
+  /** Shown right after a switch, so the user can tell it worked and what changed. */
+  switched: (id: string, detail: string, configPath: string) => string;
+};
+
+/**
+ * Feedback for `/dictation model use <id>`: name the model, say what it changes
+ * (capability), and when it starts to apply. Without the capability the user has
+ * to guess whether "live text while you speak" just went away.
+ */
+export const describeModelSwitch = (id: string, configPath: string, words: LocalModelWords): string => {
+  const spec = localModelSpec(id);
+  return words.switched(id, spec ? `${spec.languages} · ${words.kind[spec.kind]}` : "", configPath);
 };
 
 /** Model list lines, ready to print. `command` is `/dictation` or `pi-dictation`. */
@@ -110,10 +122,12 @@ export const describeLocalModels = (
   options: { dirs?: boolean } = {},
 ): string[] => {
   const lines = localModelRows(config).map((row) => {
-    const parts = [row.ready ? "✓" : "✗", `${row.id} — ${row.label} · ${row.languages} · ≈${row.sizeMb} MB`, `· ${words.kind[row.kind]}`];
-    if (row.active) parts.push(`· ${words.active}`);
-    if (!row.ready) parts.push(`· ${words.notDownloaded}`);
-    const line = parts.join(" ");
+    // Short on purpose: the list is read in a 80-column terminal, and the id is
+    // the only part that gets typed. Long descriptions live in the README.
+    const parts = [`${row.ready ? "✓" : "✗"} ${row.id}`, row.languages, words.kind[row.kind]];
+    if (!row.ready) parts.push(`${words.notDownloaded} ≈${row.sizeMb} MB`);
+    if (row.active) parts.push(words.active);
+    const line = parts.join(" · ");
     return options.dirs ? `${line}\n  ${row.dir}` : line;
   });
   lines.push(words.switchHint(command));

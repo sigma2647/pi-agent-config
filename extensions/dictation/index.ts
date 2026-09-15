@@ -23,7 +23,7 @@ import {
   saveConfig,
   type DictationConfig,
 } from "./config.ts";
-import { applyReplacements, describeLocalModels, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
+import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
 import { DEFAULT_LOCAL_MODEL, isStreamingModel, knownModelIds, localModelSpec } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { createStreamingSession, loadStreamingRecognizer, type StreamingSession } from "./local/streaming.ts";
@@ -53,6 +53,18 @@ const METER_SLICES = 24;
 const METER_SLICE_MS = 20;
 const TAIL_BYTES = Math.round((16000 * 2 * METER_SLICES * METER_SLICE_MS) / 1000);
 const TOGGLE_DEBOUNCE_MS = 400;
+/**
+ * Release detection for terminals that never report a key release (no kitty
+ * keyboard protocol): the only proof that the key is still down is the stream
+ * of auto-repeat events, so a gap in that stream means the user let go.
+ *
+ * The first window must outlast the terminal's auto-repeat delay — 500 ms on
+ * most systems, 660 ms on stock X11 — or a held key would read as released
+ * before its first repeat arrives. Later repeats use the short window: they
+ * arrive every few dozen milliseconds, so a 300 ms gap is already a release.
+ */
+const GAP_FIRST_MS = 800;
+const GAP_REPEAT_MS = 300;
 
 type FinishMode = "insert" | "send" | "test";
 
@@ -105,6 +117,9 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let lastToggle = 0;
   let holdUnsupported = false;
+  /** True while the hotkey is down, as far as the press/repeat stream can tell. */
+  let keyDown = false;
+  let gapTimer: ReturnType<typeof setTimeout> | undefined;
   let busy = false;
   /** Live prompt insert: prefix/suffix around the caret at record start. */
   let draft: LiveDraft | undefined;
@@ -374,6 +389,28 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     await finishRecording(ctx, config.output.submitOnStop ? "send" : "insert");
   };
 
+  const clearGapTimer = (): void => {
+    if (gapTimer) clearTimeout(gapTimer);
+    gapTimer = undefined;
+  };
+
+  /**
+   * "No press for `ms`" means "the key came up". This is what makes hold-to-talk
+   * work on terminals that send presses and repeats but never a release; on
+   * kitty terminals the real release event arrives first and cancels the timer.
+   */
+  const armGapTimer = (ctx: ExtensionContext, ms: number): void => {
+    clearGapTimer();
+    gapTimer = setTimeout(() => {
+      gapTimer = undefined;
+      if (!keyDown) return;
+      keyDown = false;
+      // Toggle mode only reacts to presses; holding is not a stop there.
+      if (config.keybindMode === "hold" && !holdUnsupported) void release(ctx);
+    }, ms);
+    gapTimer.unref?.();
+  };
+
   const abortHandle = async (): Promise<void> => {
     const active = handle;
     handle = undefined;
@@ -449,7 +486,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   pi.registerCommand("dictation", {
     description: `${strings.product} — ${strings.command.description}`,
     getArgumentCompletions: (prefix) => {
-      const commands = ["start", "stop", "send", "cancel", "status", "provider", "model", "test", "mic", "doctor", "config"];
+      const commands = ["start", "stop", "send", "cancel", "status", "provider", "model", "mode", "test", "mic", "doctor", "config"];
       return commands
         .filter((command) => command.startsWith(prefix.trim().toLowerCase()))
         .map((command) => ({ value: command, label: command }));
@@ -484,6 +521,9 @@ export default async function dictationExtension(pi: ExtensionAPI) {
         case "model":
           await handleModel(param, ctx);
           return;
+        case "mode":
+          handleMode(param, ctx);
+          return;
         case "test":
           await startRecording(ctx, clampSeconds(param));
           return;
@@ -512,7 +552,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       path: Type.String({ description: "Absolute path to the audio file" }),
       language: Type.Optional(Type.String({ description: "Language hint (e.g. zh, en). Default: auto-detect" })),
-      provider: Type.Optional(Type.String({ description: "Provider id override (local, openai, groq, siliconflow, deepgram)" })),
+      provider: Type.Optional(Type.String({ description: "Provider id override; run /dictation provider to list them" })),
     }),
     async execute(_toolCallId, params, signal) {
       const fresh = loadConfig();
@@ -558,12 +598,22 @@ export default async function dictationExtension(pi: ExtensionAPI) {
         const helpers = editorHelpers;
         if (!helpers?.matchesKey(data, config.keybind)) return undefined;
         const active = sessionCtx ?? ctx;
-        if (helpers.isKeyRepeat(data)) return { consume: true };
+
         if (helpers.isKeyRelease(data)) {
-          void release(active);
+          const wasDown = keyDown;
+          keyDown = false;
+          clearGapTimer();
+          if (wasDown) void release(active);
           return { consume: true };
         }
-        void toggle(active);
+
+        // A press, or an auto-repeat that only the kitty protocol can label as
+        // one. Until the gap timer fires, both mean "still held": acting on a
+        // repeat would turn one held key into a stream of starts and stops.
+        const repeated = keyDown || helpers.isKeyRepeat(data);
+        keyDown = true;
+        armGapTimer(active, repeated ? GAP_REPEAT_MS : GAP_FIRST_MS);
+        if (!repeated) void toggle(active);
         return { consume: true };
       });
     }
@@ -603,7 +653,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     const configured = config.provider === "auto" ? "auto" : config.provider;
     const recorder = detectRecorderTool(config.capture);
     const lines = [
-      strings.command.status(state, `${resolved ? resolved.id : "none"} (${configured})`, config.keybind, ctx.hasUI ? defaultConfigPath() : "-"),
+      strings.command.status(state, `${resolved ? resolved.id : "none"} (${configured})`, config.keybind, config.keybindMode, ctx.hasUI ? defaultConfigPath() : "-"),
       `recorder: ${recorder.tool ?? "none"} (${recorder.detail})`,
       ...(resolved ? [resolved.status.detail] : []),
       ...providerStatuses(config)
@@ -654,6 +704,20 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     showStatus(ctx);
   };
 
+  /** `/dictation mode hold|toggle` — hold is record-while-held, toggle is press-to-stop. */
+  const handleMode = (param: string, ctx: ExtensionContext): void => {
+    const wanted = param.trim().toLowerCase();
+    if (wanted !== "hold" && wanted !== "toggle") {
+      notify(ctx, strings.command.usage, "error");
+      return;
+    }
+    // No restart needed: every recording reloads the config.
+    config = { ...config, keybindMode: wanted };
+    saveConfig(config);
+    notify(ctx, strings.command.keybindSet(wanted));
+    showStatus(ctx);
+  };
+
   const handleModel = async (param: string, ctx: ExtensionContext): Promise<void> => {
     const [sub = "status", id = DEFAULT_LOCAL_MODEL] = param.split(/\s+/).filter(Boolean);
 
@@ -692,7 +756,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
       }
       config = result.config;
       saveConfig(config);
-      notify(ctx, strings.command.modelSet(id, defaultConfigPath()));
+      notify(ctx, describeModelSwitch(id, defaultConfigPath(), strings.model));
       return;
     }
 
@@ -711,12 +775,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
       return;
     }
 
-    const lines = describeLocalModels(config, "/dictation", {
-      kind: strings.model.kind,
-      active: strings.model.active,
-      notDownloaded: strings.model.notDownloaded,
-      switchHint: strings.model.switchHint,
-    });
+    const lines = describeLocalModels(config, "/dictation", strings.model);
     notify(ctx, lines.join("\n"));
   };
 }

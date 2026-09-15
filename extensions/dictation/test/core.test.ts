@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DEFAULT_CONFIG, mergeConfig, type DictationConfig } from "../config.ts";
-import { applyReplacements, describeLocalModels, doctorReport, formatTranscript, isTooShortForCloud, setLocalModel, transcribeFile } from "../core.ts";
+import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, isTooShortForCloud, setLocalModel, transcribeFile } from "../core.ts";
+import { DEFAULT_LOCAL_MODEL, localModelSpec } from "../local/catalog.ts";
+import { resolveStrings } from "../strings.ts";
 import { wavHeader } from "../audio.ts";
 import { isPcm16Wav } from "../wav.ts";
 import { providerStatus, resolveProvider } from "../providers/index.ts";
@@ -82,13 +84,22 @@ test("describeLocalModels marks the model in use, the missing one, and how to sw
       active: "ACTIVE",
       notDownloaded: "MISSING",
       switchHint: (command) => `switch via ${command} model use`,
+      switched: (id, detail) => `SWITCHED ${id} ${detail}`,
     });
 
-    const [downloaded, absent, hint] = lines;
-    assert.match(downloaded ?? "", /^✓ sense-voice-small — .* OFFLINE · ACTIVE$/);
-    assert.doesNotMatch(downloaded ?? "", /MISSING/);
-    assert.match(absent ?? "", /^✗ x-asr-480ms-zh-en-punct — .* STREAMING · MISSING$/);
-    assert.doesNotMatch(absent ?? "", /ACTIVE/);
+    const hint = lines.at(-1);
+    const models = lines.slice(0, -1);
+    const active = models.filter((line) => line.includes("ACTIVE"));
+    assert.equal(active.length, 1, "exactly one model is marked as in use");
+    // The line stays short: id, languages, capability, state — no label, no size
+    // for a model that is already on disk.
+    assert.match(active[0] ?? "", /^✓ sense-voice-small · [^·]+ · OFFLINE · ACTIVE$/);
+    assert.doesNotMatch(active[0] ?? "", /MISSING/);
+    assert.doesNotMatch(active[0] ?? "", /MB/, "no download size for a model that is already there");
+    assert.ok(
+      models.some((line) => /^✗ x-asr-480ms-zh-en-punct · [^·]+ · STREAMING · MISSING ≈\d+ MB$/.test(line)),
+      `the streaming model is listed as not downloaded: ${models.join(" | ")}`,
+    );
     assert.equal(hint, "switch via /dictation model use");
   }));
 
@@ -98,6 +109,7 @@ test("describeLocalModels names the caller's own command, so both lists stay run
     active: "c",
     notDownloaded: "d",
     switchHint: (command) => `${command} model use <id>`,
+    switched: (id, detail) => `${id} ${detail}`,
   });
   assert.equal(lines.at(-1), "pi-dictation model use <id>");
 });
@@ -246,4 +258,15 @@ test("a too-short cloud recording is skipped instead of uploaded", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("describeModelSwitch says which model, what it changes, and when it applies", () => {
+  const message = describeModelSwitch(DEFAULT_LOCAL_MODEL, "/tmp/dictation.json", resolveStrings("zh").model);
+  assert.match(message, /已切到 sense-voice-small/);
+  assert.match(message, /说完再出字/, "the capability change is the part the user cannot guess");
+  assert.match(message, /下一次录音生效/);
+  assert.match(message, /\/tmp\/dictation\.json/);
+  // An id with no catalog entry must not produce "undefined" in the message.
+  assert.doesNotMatch(describeModelSwitch(DEFAULT_LOCAL_MODEL, "/tmp/x.json", resolveStrings("en").model), /undefined/);
+  assert.ok(localModelSpec(DEFAULT_LOCAL_MODEL));
 });

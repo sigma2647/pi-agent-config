@@ -1,90 +1,37 @@
 /**
- * Provider registry: one place that answers three questions.
+ * Backend registry: one place that answers three questions.
  *   1. which providers are configured,
  *   2. which of them can actually run right now,
  *   3. which one `provider: "auto"` picks (first ready in AUTO_PROVIDER_ORDER).
  *
- * Adding a vendor = write `providers/<name>.ts` + one case in `createProvider`.
+ * Every backend — the in-process local runtime and every cloud service — has the
+ * same shape (`Backend` in `./types.ts`): how to run it, and how to say whether
+ * it can run. Adding a service is a new file plus one line in `BACKENDS`; nothing
+ * in this file has to change, and TypeScript refuses to compile if a config type
+ * is left without a backend.
  */
 
-import { AUTO_PROVIDER_ORDER, resolveApiKey, type ProviderConfig, type DictationConfig } from "../config.ts";
-import { localModelSpec } from "../local/catalog.ts";
-import { modelState } from "../local/model.ts";
-import { SHERPA_INSTALL_HINT, sherpaRuntimeAvailable } from "../local/sherpa.ts";
-import { createLocalProvider } from "../local/provider.ts";
-import { createDeepgramProvider } from "./deepgram.ts";
-import { endpointNeedsAuth } from "./endpoint.ts";
-import { createOpenAiCompatibleProvider } from "./openai-compatible.ts";
-import type { SttProvider } from "./types.ts";
+import { AUTO_PROVIDER_ORDER, type DictationConfig, type ProviderConfig } from "../config.ts";
+import { localBackend } from "../local/backend.ts";
+import { deepgramBackend } from "./deepgram.ts";
+import { openAiCompatibleBackend } from "./openai-compatible.ts";
+import type { Backend, ProviderStatus, SttProvider } from "./types.ts";
 
-export type ProviderStatus = {
-  id: string;
-  kind: "local" | "cloud";
-  label: string;
-  ready: boolean;
-  detail: string;
+/** Config `type` → the code that runs it. The only such list in the extension. */
+const BACKENDS: { [Type in ProviderConfig["type"]]: Backend<Extract<ProviderConfig, { type: Type }>> } = {
+  local: localBackend,
+  "openai-compatible": openAiCompatibleBackend,
+  deepgram: deepgramBackend,
 };
 
-export const providerKind = (config: ProviderConfig): "local" | "cloud" => (config.type === "local" ? "local" : "cloud");
+/**
+ * TypeScript cannot correlate the map key with the matching member of the config
+ * union, so the single cast lives here rather than in a switch at every call site.
+ */
+const backendFor = (type: ProviderConfig["type"]): Backend<ProviderConfig> => BACKENDS[type] as Backend<ProviderConfig>;
 
-export const providerStatus = (id: string, config: ProviderConfig, env: NodeJS.ProcessEnv = process.env): ProviderStatus => {
-  const kind = providerKind(config);
-
-  if (config.type === "local") {
-    const spec = localModelSpec(config.model);
-    if (!spec) {
-      return { id, kind, label: "local", ready: false, detail: `unknown local model "${config.model}" (run /dictation model to list)` };
-    }
-    const state = modelState(config.model);
-    // Downloaded files are not enough: without the sherpa-onnx package the model
-    // cannot run, and "ready" would only fail after the user finished speaking.
-    if (state.ready && !sherpaRuntimeAvailable()) {
-      return {
-        id,
-        kind,
-        label: `local · ${spec.label}`,
-        ready: false,
-        detail: `model ready (${state.dir}) but the sherpa-onnx runtime is missing — ${SHERPA_INSTALL_HINT}`,
-      };
-    }
-    return {
-      id,
-      kind,
-      label: `local · ${spec.label}`,
-      ready: state.ready,
-      detail: state.ready ? `model ready (${state.dir})` : `model not downloaded: /dictation model download (≈${state.sizeMb} MB)`,
-    };
-  }
-
-  if (config.type === "openai-compatible") {
-    let local = false;
-    try {
-      local = !endpointNeedsAuth(config.endpoint);
-    } catch (error) {
-      return { id, kind, label: "openai-compatible", ready: false, detail: error instanceof Error ? error.message : String(error) };
-    }
-    if (local) {
-      return { id, kind, label: `openai-compatible · ${config.model}`, ready: true, detail: `local endpoint ${config.endpoint} (no key needed)` };
-    }
-    const { key, source } = resolveApiKey(config, env);
-    return {
-      id,
-      kind,
-      label: `openai-compatible · ${config.model}`,
-      ready: Boolean(key),
-      detail: key ? `${config.endpoint} (key from ${source})` : `${config.endpoint} — set ${config.apiKeyEnv || "apiKey"}`,
-    };
-  }
-
-  const { key, source } = resolveApiKey(config, env);
-  return {
-    id,
-    kind,
-    label: `deepgram · ${config.model}`,
-    ready: Boolean(key),
-    detail: key ? `${config.endpoint} (key from ${source})` : `${config.endpoint} — set ${config.apiKeyEnv || "apiKey"}`,
-  };
-};
+export const providerStatus = (id: string, config: ProviderConfig, env: NodeJS.ProcessEnv = process.env): ProviderStatus =>
+  backendFor(config.type).status(id, config, env);
 
 export const providerStatuses = (config: DictationConfig, env: NodeJS.ProcessEnv = process.env): ProviderStatus[] =>
   Object.entries(config.providers).map(([id, provider]) => providerStatus(id, provider, env));
@@ -119,19 +66,7 @@ export const resolveProvider = (config: DictationConfig, env: NodeJS.ProcessEnv 
   return undefined;
 };
 
-export const createProvider = (id: string, config: ProviderConfig, env: NodeJS.ProcessEnv = process.env): SttProvider => {
-  switch (config.type) {
-    case "local":
-      return createLocalProvider(id, config);
-    case "openai-compatible":
-      return createOpenAiCompatibleProvider(id, config, env);
-    case "deepgram":
-      return createDeepgramProvider(id, config, env);
-    default: {
-      const exhaustive: never = config;
-      throw new Error(`unknown provider type: ${JSON.stringify(exhaustive)}`);
-    }
-  }
-};
+export const createProvider = (id: string, config: ProviderConfig, env: NodeJS.ProcessEnv = process.env): SttProvider =>
+  backendFor(config.type).create(id, config, env);
 
-export type { SttProvider } from "./types.ts";
+export type { Backend, ProviderStatus, SttProvider } from "./types.ts";

@@ -11,7 +11,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { DEFAULT_LOCAL_MODEL, isStreamingModel, localModelSpec, modelDir, modelsRoot } from "../local/catalog.ts";
+import { DEFAULT_LOCAL_MODEL, isStreamingModel, knownModelIds, localModelSpec, modelDir, modelsRoot, type LocalModelSpec } from "../local/catalog.ts";
+import { localFamily } from "../local/families/index.ts";
 import { deleteModel, downloadModel, modelState } from "../local/model.ts";
 import { createLocalProvider } from "../local/provider.ts";
 import { createStreamingSession, pcmToSamples } from "../local/streaming.ts";
@@ -98,8 +99,25 @@ test("the catalog describes the streaming model completely", () => {
   assert.equal(spec.kind, "streaming");
   assert.equal(isStreamingModel(STREAMING_MODEL), true);
   assert.equal(isStreamingModel(DEFAULT_LOCAL_MODEL), false);
-  assert.deepEqual(spec.files, [spec.encoder, spec.decoder, spec.joiner, spec.tokens]);
-  for (const file of spec.files) assert.ok(file && file.length > 0);
+  const files = localFamily(spec).files(spec);
+  assert.deepEqual(files, [spec.encoder, spec.decoder, spec.joiner, spec.tokens]);
+  for (const file of files) assert.ok(file && file.length > 0);
+});
+
+test("every catalog entry names a family that can do what its kind claims", () => {
+  for (const id of knownModelIds()) {
+    const spec = localModelSpec(id)!;
+    const family = localFamily(spec);
+    assert.ok(family.files(spec).length > 0, `${id} lists the files it needs`);
+    if (spec.kind === "offline") assert.ok(family.offline, `${id} is offline, so its family needs an offline config`);
+    else assert.ok(family.online, `${id} streams, so its family needs an online config`);
+  }
+});
+
+test("a family says which catalog field is missing instead of silently using a broken path", () => {
+  const broken: LocalModelSpec = { ...localModelSpec(DEFAULT_LOCAL_MODEL)! };
+  delete broken.tokens;
+  assert.throws(() => localFamily(broken).files(broken), /missing its "tokens" file entry/);
 });
 
 test("a streaming session explains a missing model instead of crashing", withModelsDir(async () => {

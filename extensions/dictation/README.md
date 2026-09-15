@@ -5,7 +5,7 @@
 插到已有文字中间时会自动补空格（`hello` + 听写 + `world` 不会粘成 `helloworld`）；中文字之间不加空格。这条只在「说完再出字」（含云端）时生效：流式模型是边说边把字写在光标处，不做补空格。
 
 ```
-ctrl+r          开始 / 结束（默认 toggle 模式）
+ctrl+r          开始 / 结束（默认 hold：按住说话，松手结束）
 Enter（录音中）  立刻结束 → 识别 → 直接发送
 Esc（录音中）    取消，不留文字
 /dictation ...   状态、切换服务、下载模型、测麦克风、自检
@@ -19,10 +19,17 @@ Esc（录音中）    取消，不留文字
 
 | 值 | 行为 | 说明 |
 |---|---|---|
-| `toggle`（默认） | 按一下开始，再按一下结束 | 任何终端都可用 |
-| `hold` | 按住说话，松开结束 | 需要终端上报「按键松开」事件（Kitty 键盘协议）。ghostty 直接跑 pi 可以；herdr 的 pane 也转发（它自己会向上层申请，并按每个 pane 的标志重新编码；用 `pi-dictation keytest` 确认）；**tmux 会吞掉松开事件，即使开了 `extended-keys on csi-u`**。不支持时第一次「再按一下」会自动降级为 `toggle` 并提示一次 |
+| `toggle` | 按一下开始，再按一下结束 | 任何终端都可用 |
+| `hold`（默认） | 按住说话，松开结束 | 优先用终端上报的「按键松开」事件（Kitty 键盘协议）；没有这种事件时自动改用下面的间隔检测，所以任何终端都能用。**tmux 会吞掉松开事件，即使开了 `extended-keys on csi-u`** |
 
-两种模式都忽略**按住不放产生的重复按键**，所以长按不会误停。
+切换（在 pi 里，立即生效、不用重启）：`/dictation mode toggle`、`/dictation mode hold`。
+
+按住不放时终端会**不停地重复发这个键**。两种模式都把整段重复当成一次按压：
+
+- 能上报「松开」的终端（Ghostty 直接跑、herdr 的 pane）：收到松开事件就算结束。
+- 不能上报的终端：靠**重复的间隔**判断。第一次按下后 800 毫秒内、或者之后 300 毫秒内没有再来一次按键，就认为手松开了。800 毫秒是为了盖住终端的「第一次重复延迟」（多数系统 500 毫秒，X11 默认 660 毫秒）。
+
+副作用：在不上报松开的终端上，**toggle 模式里两次按键间隔小于约 0.8 秒时，第二次会被当成重复而忽略**（一个物理按压只算一次）。
 
 想确认自己的终端属于哪种：在**终端里直接**运行
 
@@ -41,13 +48,15 @@ pi-dictation keytest        # 按几次 ctrl+r（含一次按住再松开），�
 | `audio.ts` | 麦克风录制（ffmpeg / pw-record / arecord / sox，统一推 raw PCM 到 stdout） |
 | `wav.ts` | PCM 解析：峰值、音量、时长 |
 | `mic.ts` | 麦克风诊断：列输入设备、采样测电平、解释「静音」 |
-| `providers/` | 语音服务：`openai-compatible`、`deepgram` |
-| `local/` | 本地模型：`catalog.ts` 模型清单、`model.ts` 下载/删除、`sherpa.ts` 运行时、`provider.ts` 离线识别、`streaming.ts` 边说边出字 |
+| `providers/` | 语音服务：`index.ts` 是唯一的注册表，`openai-compatible`、`deepgram` 各占一个文件 |
+| `local/` | 本地模型：`catalog.ts` 模型清单、`families/` 每种模型家族一个文件、`model.ts` 下载/删除、`sherpa.ts` 运行时、`provider.ts` 离线识别、`streaming.ts` 边说边出字 |
+| `scripts/qwen3-asr-server.py` | 可选：在本机跑 Qwen3-ASR 的 OpenAI 兼容服务（最准的中文模型，装不进 WASM 运行时） |
 | `ui.ts` | 边框标签、音量条、按键拦截 |
 | `keyprobe.ts` | 解码终端按键事件（判断是否支持「松开」），供 `pi-dictation keytest` 用 |
-| `docs/asr-model-selection.md` | 语音识别模型候选清单与选型分析（本地 + 云端），供后续选型用 |
+| `docs/adding-a-model.md` | 加模型、加服务的标准做法（四条扩展点，不动分发逻辑） |
+| `docs/asr-model-selection.md` | 语音识别模型候选清单与实测数据（本地 + 云端），供后续选型用 |
 
-新增一个云端服务：写 `providers/<名字>.ts`，在 `providers/index.ts` 的 `createProvider` 加一个分支即可，其他文件不用改。
+加模型或加服务只动一处，分发逻辑不用改：OpenAI 兼容的云端服务加一条配置；私有协议的云端服务加一个文件 + 注册表一行；本地新模型加一条目录；新的本地模型家族加一个文件 + 注册表一行。细则见 `docs/adding-a-model.md`。
 
 ## 安装与依赖
 
@@ -64,12 +73,15 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 
 ## 本地模型（离线）
 
-内置两个模型，同一时间用一个（`providers.local.model`）：
+内置三个模型，同一时间用一个（`providers.local.model`）：
 
 | id | 特点 | 大小 | 速度 |
 |---|---|---|---|
 | `sense-voice-small`（默认） | 中英日韩粤，自带标点，识别完再出结果 | 155 MB | 约 0.1 RTF |
+| `fire-red-asr2-ctc-zh-en` | 中文最准（含 20 多种方言），**不出标点**，单段最多 60 秒 | 496 MB | 约 0.3 RTF |
 | `x-asr-480ms-zh-en-punct` | 中英，**边说边出字**，自带标点 | 127 MB | 约 0.1 RTF，第一批字 0.2 秒 |
+
+短句（几秒）和长句（一分钟以上）谁更准不一样，实测数据见 `docs/asr-model-selection.md`。
 
 ```bash
 /dictation model                          # 查看模型状态（会标出哪个在用、怎么切换）
@@ -97,9 +109,32 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 - `/dictation model use` / `pi-dictation model use` / `/dictation provider` 会写回 `dictation.json`。
 - `/dictation test 5` 也会显示实时文字，但结果只显示、不插入。
 
+### 本地大模型：Qwen3-ASR（最准，需要另外起一个服务）
+
+Qwen3-ASR 是实测里中文最准的模型，但权重（0.6B 约 1.2 GB、1.7B 约 3.4 GB）超过 WASM 运行时能承受的范围，装不进扩展。做法是把它当成**本机的一个 OpenAI 兼容服务**，扩展侧只加一条配置：
+
+```bash
+uv run --torch-backend=cpu scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
+```
+
+```json
+{
+  "providers": {
+    "qwen-local": {
+      "type": "openai-compatible",
+      "endpoint": "http://127.0.0.1:8123/v1/audio/transcriptions",
+      "model": "qwen3-asr",
+      "language": "auto"
+    }
+  }
+}
+```
+
+然后 `/dictation provider qwen-local`。首次运行会下载权重（1.7B 约 3.4 GB）并加载，之后常驻内存；CPU 上速度约等于音频时长（10 秒录音等约 10 秒），这台机器的 2 GB 显卡帮不上忙。
+
 ## 云端服务
 
-`providers` 里内置 5 个条目，`provider: "auto"` 时按 `local → openai → groq → siliconflow → deepgram` 取第一个就绪的：
+`providers` 里内置 6 个条目，`provider: "auto"` 时按 `local → openai → groq → siliconflow → glm → deepgram` 取第一个就绪的：
 
 | id | 类型 | 默认模型 | 需要的环境变量 |
 |---|---|---|---|
@@ -107,6 +142,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 | `openai` | OpenAI 兼容 | `whisper-1` | `OPENAI_API_KEY` |
 | `groq` | OpenAI 兼容 | `whisper-large-v3-turbo` | `GROQ_API_KEY` |
 | `siliconflow` | OpenAI 兼容 | `FunAudioLLM/SenseVoiceSmall` | `SILICONFLOW_API_KEY` |
+| `glm` | OpenAI 兼容（智谱） | `glm-asr-2512` | `GLM_API_KEY`（单段 ≤30 秒；需开通语音资源包） |
 | `deepgram` | Deepgram | `nova-3` | `DEEPGRAM_API_KEY` |
 
 任何 OpenAI 兼容的语音接口（含本机 whisper.cpp / faster-whisper / sherpa-onnx server）都可以加一条：
@@ -161,7 +197,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 - `output.replacements`：识别结果里的固定错词替换（大小写不敏感；含中文时不做词边界限制）。
 - `capture.device`：`auto`/空＝默认设备；Linux 用 PulseAudio 源名，macOS 用 `:0`/`:1`，Windows 用设备名或 `default`。
 - `locale`：`zh`（默认）或 `en`。修改 `keybind`/`locale` 后需要 `/reload` 或重启 pi。
-- `keybindMode` 默认 `toggle`（按一下开始，再按一下结束）；改成 `hold` 就是按住说话、松开结束（见上面的按键模式表）。
+- `keybindMode` 默认 `hold`（按住说话，松手结束）；`toggle` 是按一下开始、再按一下结束。在 pi 里用 `/dictation mode hold|toggle` 切（见上面的按键模式表）。
 - `keybind` 默认 `ctrl+r`（与 pi 内置的「重命名会话」冲突，本扩展优先；想消掉启动提示见下文排查表）。
 
 ## 在 pi 里
@@ -172,6 +208,7 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 /dictation model          列出本地模型（标出当前用的那个 + 切换命令）
 /dictation model use <id> 切换本地模型（如 x-asr-480ms-zh-en-punct 边说边出字）
 /dictation model download 下载本地模型
+/dictation mode hold      切按键模式（hold 按住说话 / toggle 按一下开始再按一下结束）
 /dictation test 5         录 5 秒，只显示识别结果、不插入
 /dictation doctor         自检（录音工具、服务、密钥、模型、配置路径）
 /dictation config         打印配置（密钥已隐藏）
@@ -206,9 +243,9 @@ pi-dictation config
 ## 测试
 
 ```bash
-npm --prefix extensions/dictation test        # 80 个测试：WAV/配置/服务/录制器/UI/模型/按键解码/麦克风诊断
+npm --prefix extensions/dictation test        # 109 个测试：WAV/配置/服务/录制器/UI/模型/按键解码/麦克风诊断
 PI_DICTATION_LOCAL_TEST=1 npm --prefix extensions/dictation test   # 含真实模型转写（需要已下载模型）
 ```
 
 录制器测试用一个假的 ffmpeg 脚本（向 stdout 推 PCM）验证：SIGINT 收尾、实时计时、实时电平、WAV 头回填、太短拒收、静音拒收、取消清理。
-接线测试用一个假的 pi 宿主验证：ctrl+r 按下/重复/松开、降级逻辑、识别后插入光标处。
+接线测试用一个假的 pi 宿主验证：ctrl+r 按下/重复/松开、无松开事件时的间隔检测、重复按键只算一次、识别后插入光标处。

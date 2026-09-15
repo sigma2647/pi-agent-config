@@ -10,7 +10,7 @@
  */
 
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -71,6 +71,13 @@ const harness = async (config: Record<string, unknown> = CONFIG): Promise<Harnes
   const previousEnv = { ...process.env };
   const modelsDir = mkdtempSync(join(tmpdir(), "pi-dictation-models-"));
   Object.assign(process.env, { PI_DICTATION_CONFIG: configPath, PI_DICTATION_MODELS_DIR: modelsDir, PATH: `${binDir}:${previousEnv.PATH ?? ""}` });
+  // Tests must never reach the network. A developer's real key would make a
+  // cloud provider "ready", so a fake recording would become a real API call —
+  // and the assertions below would depend on which keys happen to be exported.
+  // Individual tests that need a key set it themselves, after this point.
+  for (const name of Object.keys(process.env)) {
+    if (/_API_KEY$/.test(name)) delete process.env[name];
+  }
 
   const shortcuts = new Map<string, (ctx: ExtensionContext) => Promise<void> | void>();
   const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> | void }>();
@@ -205,15 +212,23 @@ const waitFor = async (predicate: () => boolean, message: string, timeoutMs = 50
   throw new Error(`timed out waiting for: ${message}`);
 };
 
+/**
+ * A press only counts as a new press once the previous burst has closed. On a
+ * terminal that reports no key release that is the auto-repeat gap: 800 ms for
+ * the first burst, 300 ms (not the 800) once repeats are arriving. Sleep past
+ * it before expecting a second toggle to register.
+ */
+const nextPressDelay = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 950));
+
 test("the /dictation model list marks the model in use and names the switch command", async () => {
   const h = await harness();
   try {
     await h.runCommand("dictation", "model");
     const message = h.ui.notifications.at(-1)?.message ?? "";
     // The list is the only place that says how to switch, so name what it must contain.
-    // (This harness points at an empty models dir, so both models read as not downloaded.)
-    assert.match(message, /sense-voice-small — .* 说完再出字 · 当前使用/);
-    assert.match(message, /x-asr-480ms-zh-en-punct — .* 边说边出字 · 未下载/);
+    // (This harness points at an empty models dir, so every model reads as not downloaded.)
+    assert.match(message, /[✓✗] sense-voice-small · [^·]+ · 说完再出字 · 未下载 ≈\d+ MB · ← 当前/);
+    assert.match(message, /✗ x-asr-480ms-zh-en-punct · [^·]+ · 边说边出字 · 未下载 ≈\d+ MB/);
     assert.match(message, /切换：\/dictation model use <id>/);
   } finally {
     h.restore();
@@ -248,7 +263,7 @@ test("the hotkey records, transcribes and inserts at the cursor", async () => {
       `expected a recording toast, got: ${h.ui.notifications.map((n) => n.message).join(" | ")}`,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await nextPressDelay();
     h.pressRawKey("\u0012");
     await waitFor(() => h.ui.inserted.length > 0, "second press transcribes and inserts");
 
@@ -274,7 +289,7 @@ test("a transcript dropped inside a word is padded on both sides", async () => {
     h.ui.editorText = "helloworld";
     h.setCursor({ line: 0, col: 5 });
     h.pressRawKey("\u0012");
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await nextPressDelay();
     h.pressRawKey("\u0012");
     await waitFor(() => h.ui.inserted.length > 0, "second press transcribes and inserts");
 
@@ -296,7 +311,7 @@ test("a raw ctrl+r keystroke is consumed and toggles recording", async () => {
     h.pressRawKey("\u0012");
     assert.equal(h.ui.widgets.get("dictation")?.length, 1, "raw ctrl+r starts recording");
 
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    await nextPressDelay();
     h.pressRawKey("\u0012");
     await waitFor(() => h.ui.inserted.length > 0, "raw ctrl+r again stops and inserts");
     assert.deepEqual(h.ui.inserted, ["raw key "]);
@@ -332,22 +347,74 @@ test("hold mode records while held and finishes on key release", async () => {
   }
 });
 
-test("hold mode falls back to press-to-stop when releases never arrive", async () => {
+test("hold mode ends by itself when the terminal sends no key release", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({ text: "legacy" }), { status: 200 })) as typeof fetch;
 
   const h = await harness();
   try {
     h.pressRawKey("\u0012"); // legacy terminal: press only, no release event
-    await new Promise((resolve) => setTimeout(resolve, 450));
+    assert.equal(h.ui.widgets.get("dictation")?.length, 1, "press starts recording");
+
+    // Auto-repeat is indistinguishable from a new press here, so it must keep
+    // the recording alive instead of stopping it.
+    await new Promise((resolve) => setTimeout(resolve, 250));
     h.pressRawKey("\u0012");
-    await waitFor(() => h.ui.inserted.length > 0, "a second press stops the recording");
-    assert.ok(
-      h.ui.notifications.some((n) => n.message.includes("不上报按键松开")),
-      "the fallback is explained once",
-    );
+    assert.equal(h.ui.widgets.get("dictation")?.length, 1, "a repeat does not stop the recording");
+
+    // The repeats stop (the key went up): the gap ends the recording.
+    await waitFor(() => h.ui.inserted.length > 0, "the gap after the last repeat stops the recording");
+    assert.deepEqual(h.ui.inserted, ["legacy "]);
   } finally {
     globalThis.fetch = originalFetch;
+    h.restore();
+  }
+});
+
+test("toggle mode ignores the auto-repeat of a held key: one press toggles once", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ text: "held" }), { status: 200 })) as typeof fetch;
+
+  const h = await harness({ ...CONFIG, keybindMode: "toggle" });
+  try {
+    h.pressRawKey("\u0012"); // press
+    h.pressRawKey("\u0012"); // auto-repeat: same physical press, no release in between
+    h.pressRawKey("\u0012");
+    assert.equal(h.ui.widgets.get("dictation")?.length, 1, "the repeat burst does not toggle the recording off");
+
+    await nextPressDelay(); // the key goes up; the burst closes
+    h.pressRawKey("\u0012");
+    await waitFor(() => h.ui.inserted.length > 0, "a real second press stops the recording");
+    assert.deepEqual(h.ui.inserted, ["held "]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    h.restore();
+  }
+});
+
+test("/dictation mode switches the key mode and saves it", async () => {
+  const h = await harness({ ...CONFIG, keybindMode: "toggle" });
+  try {
+    await h.runCommand("dictation", "mode hold");
+    assert.ok(
+      h.ui.notifications.some((n) => n.message.includes("按键模式已切换为 hold")),
+      `expected a mode toast, got: ${h.ui.notifications.map((n) => n.message).join(" | ")}`,
+    );
+    const saved = JSON.parse(readFileSync(process.env.PI_DICTATION_CONFIG as string, "utf8"));
+    assert.equal(saved.keybindMode, "hold", "the new mode is written to the config file");
+  } finally {
+    h.restore();
+  }
+});
+
+test("/dictation mode rejects anything but hold or toggle", async () => {
+  const h = await harness();
+  try {
+    await h.runCommand("dictation", "mode sideways");
+    const last = h.ui.notifications.at(-1);
+    assert.equal(last?.type, "error", `expected an error, got: ${JSON.stringify(last)}`);
+    assert.match(last?.message ?? "", /mode \[hold\|toggle\]/, "the message names the accepted values");
+  } finally {
     h.restore();
   }
 });

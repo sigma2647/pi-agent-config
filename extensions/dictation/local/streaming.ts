@@ -13,6 +13,7 @@
 
 import { join } from "node:path";
 import { localModelSpec, modelDir, type LocalModelSpec } from "./catalog.ts";
+import { localFamily } from "./families/index.ts";
 import { modelState } from "./model.ts";
 import { loadSherpa, type SherpaModule, type SherpaOnlineRecognizer, type SherpaOnlineStream } from "./sherpa.ts";
 
@@ -47,14 +48,12 @@ export const loadStreamingRecognizer = async (modelId: string, sherpa?: SherpaMo
     const spec = streamingSpec(modelId);
     const dir = modelDir(modelId);
     const runtime = sherpa ?? (await loadSherpa());
+    const family = localFamily(spec);
+    const modelConfig = family.online?.(spec, dir);
+    if (!modelConfig) throw new Error(`local model ${modelId} cannot stream (family "${family.id}" decodes a finished recording only)`);
     return runtime.createOnlineRecognizer({
       modelConfig: {
-        transducer: {
-          encoder: join(dir, spec.encoder!),
-          decoder: join(dir, spec.decoder!),
-          joiner: join(dir, spec.joiner!),
-        },
-        tokens: join(dir, spec.tokens),
+        ...modelConfig,
         numThreads: 1,
         provider: "cpu",
         debug: 0,
@@ -152,7 +151,6 @@ const streamingSpec = (modelId: string): LocalModelSpec => {
   const spec = localModelSpec(modelId);
   if (!spec) throw new Error(`unknown local model: ${modelId}`);
   if (spec.kind !== "streaming") throw new Error(`local model ${modelId} is not a streaming model`);
-  if (!spec.encoder || !spec.decoder || !spec.joiner) throw new Error(`local model ${modelId} has no streaming model files`);
   const state = modelState(modelId);
   if (!state.ready) throw new Error(`local model ${modelId} is not downloaded (missing ${state.missing.join(", ") || "files"})`);
   return spec;

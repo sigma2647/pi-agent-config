@@ -79,7 +79,7 @@ export type DictationConfig = {
  * Deterministic preference order for `provider: "auto"`.
  * Offline first (no network, no key, no cost), then hosted providers.
  */
-export const AUTO_PROVIDER_ORDER = ["local", "openai", "groq", "siliconflow", "deepgram"] as const;
+export const AUTO_PROVIDER_ORDER = ["local", "openai", "groq", "siliconflow", "glm", "deepgram"] as const;
 
 export const DEFAULT_CONFIG: DictationConfig = {
   locale: "zh",
@@ -87,12 +87,12 @@ export const DEFAULT_CONFIG: DictationConfig = {
   // (pi prints an extension-shortcut conflict note). To silence it, add
   // `"app.session.rename": []` to ~/.pi/agent/keybindings.json.
   keybind: "ctrl+r",
-  // Default is press-to-start / press-to-stop: it works in every terminal.
-  // "hold" (record while held, stop on key release) needs a terminal that
-  // reports key-release events — ghostty/kitty/wezterm do, but tmux swallows
-  // them. Check with `pi-dictation keytest`; the extension also degrades to
-  // toggle automatically and says so once.
-  keybindMode: "toggle",
+  // Default is hold-to-talk: record while the key is held, stop when it comes
+  // up. Terminals with key-release events (ghostty/kitty/wezterm) hand the
+  // release over directly; everywhere else the extension reads the gap in the
+  // auto-repeat stream instead, so "hold" works in every terminal. Switch to
+  // "toggle" (press to start, press to stop) with `/dictation mode toggle`.
+  keybindMode: "hold",
   provider: "auto",
   providers: {
     local: { type: "local", model: "sense-voice-small", language: "auto" },
@@ -116,6 +116,17 @@ export const DEFAULT_CONFIG: DictationConfig = {
       model: "FunAudioLLM/SenseVoiceSmall",
       language: "auto",
       apiKeyEnv: "SILICONFLOW_API_KEY",
+    },
+    // Zhipu GLM-ASR. Its `/audio/transcriptions` takes the same multipart form
+    // as OpenAI's, so it is a config entry and no new code. The service rejects
+    // one upload longer than 30 s; unlike the local models it cannot be given a
+    // longer recording, so keep dictations short when this is the active provider.
+    glm: {
+      type: "openai-compatible",
+      endpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+      model: "glm-asr-2512",
+      language: "auto",
+      apiKeyEnv: "GLM_API_KEY",
     },
     deepgram: {
       type: "deepgram",

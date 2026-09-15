@@ -16,6 +16,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { archivePathFor, modelDir, localModelSpec, type LocalModelSpec } from "./catalog.ts";
+import { localFamily } from "./families/index.ts";
 import { findExecutable } from "../audio.ts";
 
 const execFileAsync = promisify(execFile);
@@ -35,7 +36,7 @@ export const modelState = (id: string): ModelState => {
   const dir = modelDir(id);
   if (!spec) return { id, dir, ready: false, missing: [], sizeMb: 0, label: id };
 
-  const missing = spec.files.filter((file) => !existsSync(`${dir}/${file}`));
+  const missing = localFamily(spec).files(spec).filter((file) => !existsSync(`${dir}/${file}`));
   return { id, dir, ready: missing.length === 0, missing, sizeMb: spec.sizeMb, label: spec.label };
 };
 
@@ -64,7 +65,7 @@ export const downloadModel = async (
   const state = modelState(id);
   if (!state.ready) {
     const found = await listFiles(modelDir(id));
-    throw new Error(`model files missing after extraction (found: ${found.join(", ") || "nothing"}); expected ${spec.files.join(", ")}`);
+    throw new Error(`model files missing after extraction (found: ${found.join(", ") || "nothing"}); expected ${localFamily(spec).files(spec).join(", ")}`);
   }
   return state;
 };

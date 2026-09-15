@@ -3,9 +3,10 @@
 import { readFile } from "node:fs/promises";
 import { resolveApiKey, type DeepgramProviderConfig } from "../config.ts";
 import { assertEndpoint, describeHttpFailure } from "./endpoint.ts";
-import { normalizeLanguage, type SttProvider } from "./types.ts";
+import { normalizeLanguage, type Backend, type SttProvider } from "./types.ts";
 import { readBody, readJson, rethrowAbort } from "./openai-compatible.ts";
 
+/** Deepgram's own protocol, so it is a backend of its own: key + raw body. */
 export const createDeepgramProvider = (
   id: string,
   config: DeepgramProviderConfig,
@@ -53,3 +54,18 @@ export const deepgramTranscript = (payload: Record<string, unknown>): string => 
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+/** The backend descriptor for the registry: Deepgram needs a key, nothing else. */
+export const deepgramBackend: Backend<DeepgramProviderConfig> = {
+  create: createDeepgramProvider,
+  status: (id, config, env) => {
+    const { key, source } = resolveApiKey(config, env);
+    return {
+      id,
+      kind: "cloud",
+      label: `deepgram · ${config.model}`,
+      ready: Boolean(key),
+      detail: key ? `${config.endpoint} (key from ${source})` : `${config.endpoint} — set ${config.apiKeyEnv || "apiKey"}`,
+    };
+  },
+};

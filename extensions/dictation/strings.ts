@@ -58,13 +58,15 @@ export type Strings = {
     notDownloaded: string;
     /** The list's last line: how to switch models. */
     switchHint: (command: string) => string;
+    /** After the user switches model: what changed, and when it applies. */
+    switched: (id: string, detail: string, configPath: string) => string;
   };
   command: {
     description: string;
     usage: string;
-    status: (state: string, provider: string, keybind: string, configPath: string) => string;
+    keybindSet: (mode: string) => string;
+    status: (state: string, provider: string, keybind: string, mode: string, configPath: string) => string;
     providerSet: (id: string) => string;
-    modelSet: (id: string, configPath: string) => string;
     providerList: (lines: string) => string;
     testStarted: (seconds: number) => string;
     testResult: (text: string) => string;
@@ -126,16 +128,18 @@ const zh: Strings = {
     deleted: (id) => `已删除本地模型 ${id}`,
     failed: (detail) => `模型操作失败：${detail}`,
     kind: { offline: "说完再出字", streaming: "边说边出字" },
-    active: "当前使用",
+    active: "← 当前",
     notDownloaded: "未下载",
-    switchHint: (command) => `切换：${command} model use <id>（未下载的先 ${command} model download <id>）`,
+    switchHint: (command) => `切换：${command} model use <id>`,
+    switched: (id, detail, configPath) =>
+      `本地模型已切到 ${id}${detail ? ` · ${detail}` : ""}\n下一次录音生效（已保存到 ${configPath}）`,
   },
   command: {
     description: "语音输入：录音、识别、模型与服务管理",
-    usage: "用法：/dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|test [秒数]|doctor|mic|config]",
-    status: (state, provider, keybind, configPath) => `状态 ${state} · 服务 ${provider} · 快捷键 ${keybind} · 配置 ${configPath}`,
+    usage: "用法：/dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|mode [hold|toggle]|test [秒数]|doctor|mic|config]",
+    keybindSet: (mode) => `按键模式已切换为 ${mode}（已保存，下一次录音生效）`,
+    status: (state, provider, keybind, mode, configPath) => `状态 ${state} · 服务 ${provider} · 快捷键 ${keybind} · 模式 ${mode} · 配置 ${configPath}`,
     providerSet: (id) => `语音服务已切换为 ${id}`,
-    modelSet: (id, configPath) => `本地模型已切换为 ${id}（已写入 ${configPath}，重启 pi 后仍生效）`,
     providerList: (lines) => `语音服务：\n${lines}`,
     testStarted: (seconds) => `测试录音 ${seconds} 秒，识别结果只显示不插入`,
     testResult: (text) => `识别结果：${text}`,
@@ -197,16 +201,18 @@ const en: Strings = {
     deleted: (id) => `Deleted local model ${id}`,
     failed: (detail) => `Model operation failed: ${detail}`,
     kind: { offline: "text after you stop", streaming: "live text while you speak" },
-    active: "current",
+    active: "← current",
     notDownloaded: "not downloaded",
-    switchHint: (command) => `switch: ${command} model use <id> (download first: ${command} model download <id>)`,
+    switchHint: (command) => `switch: ${command} model use <id>`,
+    switched: (id, detail, configPath) =>
+      `switched to ${id}${detail ? ` · ${detail}` : ""}\neffective on the next recording (saved to ${configPath})`,
   },
   command: {
     description: "Voice input: record, transcribe, manage models and services",
-    usage: "Usage: /dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|test [seconds]|doctor|mic|config]",
-    status: (state, provider, keybind, configPath) => `state ${state} · service ${provider} · keybind ${keybind} · config ${configPath}`,
+    usage: "Usage: /dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|mode [hold|toggle]|test [seconds]|doctor|mic|config]",
+    keybindSet: (mode) => `Key mode switched to ${mode} (saved; applies to the next recording)`,
+    status: (state, provider, keybind, mode, configPath) => `state ${state} · service ${provider} · keybind ${keybind} · mode ${mode} · config ${configPath}`,
     providerSet: (id) => `Speech service switched to ${id}`,
-    modelSet: (id, configPath) => `Local model switched to ${id} (saved to ${configPath} — survives a pi restart)`,
     providerList: (lines) => `Speech services:\n${lines}`,
     testStarted: (seconds) => `Test recording for ${seconds}s — the transcript is shown, not inserted`,
     testResult: (text) => `Transcript: ${text}`,

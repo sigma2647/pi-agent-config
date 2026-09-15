@@ -16,11 +16,12 @@ import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { createRecorder } from "./audio.ts";
 import { defaultConfigPath, ensureConfigFile, loadConfig, redactConfig, saveConfig, type DictationConfig } from "./config.ts";
-import { describeLocalModels, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
+import { describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
 import { decodeKeyEvents, keytestVerdict, parseKittyFlags, type DecodedKey } from "./keyprobe.ts";
 import { DEFAULT_LOCAL_MODEL, knownModelIds } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { providerStatuses, resolveProvider } from "./providers/index.ts";
+import { resolveStrings } from "./strings.ts";
 
 type Flags = {
   provider?: string;
@@ -195,7 +196,7 @@ const modelCommand = async (config: DictationConfig, flags: Flags): Promise<numb
       return 1;
     }
     saveConfig(result.config);
-    process.stdout.write(`${id} is now the local model (saved to ${defaultConfigPath()})\n`);
+    process.stdout.write(`${describeModelSwitch(id, defaultConfigPath(), resolveStrings(config.locale).model)}\n`);
     return 0;
   }
   if (sub === "delete") {
@@ -207,18 +208,10 @@ const modelCommand = async (config: DictationConfig, flags: Flags): Promise<numb
     process.stdout.write(`${modelState(id).dir}\n`);
     return 0;
   }
+  // The list's words live in strings.ts, the single place user-visible text lives;
+  // the CLI follows the configured locale instead of keeping its own copy.
   process.stdout.write(
-    `${describeLocalModels(
-      config,
-      "pi-dictation",
-      {
-        kind: { offline: "text after you stop", streaming: "live text while you speak" },
-        active: "current",
-        notDownloaded: "not downloaded",
-        switchHint: (command) => `switch: ${command} model use <id> (download first: ${command} model download <id>)`,
-      },
-      { dirs: true },
-    ).join("\n")}\n`,
+    `${describeLocalModels(config, "pi-dictation", resolveStrings(config.locale).model, { dirs: true }).join("\n")}\n`,
   );
   return 0;
 };
