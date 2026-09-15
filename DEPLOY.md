@@ -1,15 +1,19 @@
-# DEPLOY.md — pi-ws / pi-wf 新机部署指南
+# DEPLOY.md — pi-ws / pi-wf / pi-dictation 新机部署指南
 
 基于 2026-07-04 Docker (Ubuntu 25.04) 真实部署过程编写。每个 "⚠️ 坑" 都是实际踩过的。
+pi-dictation 那节是 2026-09-15 在干净副本上 `npm ci` 实测后补的（见该节的验证记录）。
 
 ## 最低系统要求
 
 | 组件 | 版本 | 原因 |
 |------|------|------|
-| Node.js | ≥ 22.6 | `--experimental-strip-types`（shebang 需要） |
+| Node.js | ≥ 22.6 | `--experimental-strip-types`（shebang 需要）；pi-dictation 的原生插件是 N-API，无 Node 版本绑定 |
 | jq | ≥ 1.6 | `extensions/install.sh` 解析 package.json |
 | git | 任意 | clone 仓库（或手动复制） |
 | curl / ca-certificates | 任意 | NodeSource 安装脚本 + HTTPS 请求 |
+| tar + bzip2 | 任意 | 仅 pi-dictation：解压模型包 |
+| 录音后端 | ffmpeg / pw-record / arecord / sox 任一 | 仅 pi-dictation：采音频 |
+| 平台 | **glibc** 的 Linux x64/arm64、macOS x64/arm64、Windows x64 | 仅 pi-dictation：`sherpa-onnx-node` 只提供这几个预编译包，**Alpine / musl 不行** |
 
 ## 安装步骤
 
@@ -38,11 +42,15 @@ apt install -y jq git ca-certificates curl
 
 ```bash
 git clone <repo-url> /opt/pi-agent-config
+
 cd /opt/pi-agent-config/extensions/web-fetch
 npm install
+
+cd /opt/pi-agent-config/extensions/dictation
+npm ci          # 用 lockfile，不要用 npm install（见下方 pi-dictation 节）
 ```
 
-⚠️ **坑：npm install 只在 web-fetch 需要。** web-search 有零 npm 依赖（全靠 pi runtime + 动态探测 undici/playwright），不需要单独 `npm install`。
+⚠️ **坑：npm install 只在 web-fetch 和 dictation 需要。** web-search 有零 npm 依赖（全靠 pi runtime + 动态探测 undici/playwright），不需要单独 `npm install`。
 
 ### 4. 安装 CLI 符号链接
 
@@ -204,6 +212,77 @@ apt install gh
 
 ---
 
+## pi-dictation 语音输入
+
+上面「最低系统要求」里的 tar/bzip2、录音后端、glibc 平台三项都是为它加的。
+
+### ⚠️ 坑：原生插件，不是 WASM
+
+`sherpa-onnx-node` 本身只有 JavaScript，真正的二进制在一个单独的包 `sherpa-onnx-<platform>-<arch>` 里，由 npm 的 optionalDependencies 按平台自动选装。**没有对应包时 `npm ci` 不会报错，包路径解析也会成功**，失败发生在真正加载的那一刻。
+
+pi 侧已经处理：`pi-dictation doctor` / `providers` 会真的加载一次插件（3 ms），缺失时报：
+
+```text
+✓ local [local] — model ready (~/.pi/agent/dictation-models/fun-asr-nano) but the sherpa-onnx runtime is missing — run: cd <dir> && npm install
+```
+
+### 安装
+
+```bash
+cd /opt/pi-agent-config/extensions/dictation
+npm ci                      # 用 npm ci，不要用 npm install
+bash ../install.sh          # 装 pi-dictation 到 ~/.local/bin
+pi-dictation doctor         # 应全绿
+```
+
+⚠️ **坑：仓库的 `package-lock.json` 必须留在 `registry.npmjs.org`。** 本机 npm 若配了镜像源，`npm install` 会把 `resolved` 改写成镜像域名，提交后在别的机器上会失败。`npm ci` 严格遵守 lockfile，不会改写。
+
+### 下载模型
+
+```bash
+pi-dictation model                              # 看有哪些、哪个在用
+pi-dictation model download sense-voice-small   # 155 MB，默认，快（0.04 RTF）
+pi-dictation model download fun-asr-nano        # 802 MB，小声说话/难中文最准，慢（0.21 RTF）
+```
+
+模型放在 `~/.pi/agent/dictation-models/`（可用 `PI_DICTATION_MODELS_DIR` 改），全装约 2 GB（含解压与压缩包缓存）。**不需要 GPU，识别过程不联网。**
+
+⚠️ **坑：模型从 GitHub Releases 下载，国内可能需要代理。** 下载走 `curl`，所以它认环境变量：`export HTTPS_PROXY=http://127.0.0.1:7890`。
+
+### 验证
+
+```bash
+pi-dictation doctor
+pi-dictation transcribe /path/to/any.wav
+```
+
+`doctor` 最后一行必须是 `ready`。它也会采样一次麦克风；**没有麦克风权限时 mic 那行会失败，但转写文件仍然可用**。
+
+### 可选：Qwen3-ASR 本机服务
+
+只有想要「最准」才需要（难中文 4.3% CER，对 `fun-asr-nano` 的 5.0%）。代价：3.4 GB 权重 + 约 8.5 GB 常驻内存，CPU 上约 1× 实时。
+
+```bash
+cd /opt/pi-agent-config/extensions/dictation
+uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
+```
+
+⚠️ **坑：不要加 `--torch-backend=cpu`。** uv 0.12.13 不接受这个参数（`unexpected argument '--torch-backend'`）。脚本内联的 metadata 已经把 PyTorch 锁到 CPU wheel，直接 `uv run` 就行。首次运行会下 3.4 GB 权重，加载约一分钟。
+
+启动后在 `~/.pi/agent/dictation.json` 里加一条 `openai-compatible` provider 指向 `http://127.0.0.1:8123/v1/audio/transcriptions`（仓库默认配置里已有一条 `qwen-local`，指向同一个地址）。
+
+### 验证记录（2026-09-15，干净副本实测）
+
+```bash
+mkdir /tmp/fresh && tar --exclude=node_modules -cf - . | (cd /tmp/fresh && tar -xf -)
+cd /tmp/fresh && npm ci          # added 140 packages in 3s
+# node_modules/ 里出现 sherpa-onnx-node 和 sherpa-onnx-linux-x64
+# package-lock.json 的 resolved 仍是 registry.npmjs.org，未被改写
+./dev.ts transcribe test/fixtures/raokouling.wav    # 正常出字
+```
+
+---
+
 ## 常见错误速查
 
 | 错误信息 | 原因 | 解决 |
@@ -216,6 +295,10 @@ apt install gh
 | `opencli: SKIPPED (not on PATH)` | opencli 未安装 | `npm install -g @jackwener/opencli` |
 | `browser: SKIPPED` | 无 CDP 端点 + 无 browser-harness | 不需要时忽略；需要时安装 Chromium |
 | `node: command not found` | Node 未安装或版本太旧 | Ubuntu 需从 NodeSource 装 24.x |
+| `local [local] ... the sherpa-onnx runtime is missing` | 没装到平台二进制包（多发生在 musl 发行版） | 在该扩展目录 `npm ci`；Alpine 等 musl 环境不支持 |
+| `Cannot find module 'sherpa-onnx-node'` | 该扩展目录没装依赖 | `cd extensions/dictation && npm ci` |
+| 模型下载卡住/超时 | GitHub Releases 需要代理 | `export HTTPS_PROXY=http://127.0.0.1:7890` |
+| `unexpected argument '--torch-backend'` | uv 版本不支持该参数（旧文档遗留） | 去掉该参数，直接 `uv run` |
 
 ---
 
@@ -248,6 +331,16 @@ pi-wf https://en.wikipedia.org/wiki/Example.com | head -5
 echo ""
 echo "=== pi-ws: Brave search ==="
 pi-ws --fast "hello world" | head -5
+
+echo ""
+echo "=== pi-dictation ==="
+pi-dictation doctor
+
+if [ -f "$HOME/.pi/agent/dictation-models/sense-voice-small/model.int8.onnx" ]; then
+  echo "sense-voice-small ok"
+else
+  echo "! 模型未下载：pi-dictation model download sense-voice-small"
+fi
 
 echo ""
 echo "✓ All checks passed"

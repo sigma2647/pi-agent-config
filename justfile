@@ -32,3 +32,32 @@ install-list:
 # 移除 install 创建的所有 CLI 包装器
 install-uninstall:
     @./extensions/install.sh --uninstall
+
+
+# --- Qwen3-ASR 听写后端（systemd 用户服务 qwen3-asr.service）---
+# pi-dictation 的 "qwen-local" provider 指向 http://127.0.0.1:8123。
+# 服务已 enable，登录/开机后自动启动；下面三条用于手动控制。
+
+# 启动听写后端，并等到模型加载完成（本机约 60 秒）
+asr-start:
+    @systemctl --user start qwen3-asr.service
+    @for i in $(seq 1 40); do \
+        curl -sf -m 2 http://127.0.0.1:8123/health 2>/dev/null | grep -q '"ok"' && { \
+            echo "qwen3-asr 就绪 — http://127.0.0.1:8123/v1/audio/transcriptions"; exit 0; }; \
+        sleep 3; \
+    done; \
+    echo "启动超时（120 秒），看 just asr-logs" >&2; exit 1
+
+# 停止听写后端，释放约 8 GB 内存
+asr-stop:
+    @systemctl --user stop qwen3-asr.service
+    @echo "qwen3-asr 已停止"
+
+# 查看听写后端状态与健康检查
+asr-status:
+    @systemctl --user status qwen3-asr.service --no-pager | head -8
+    @printf 'health: '; curl -s -m 2 http://127.0.0.1:8123/health || echo "无响应"
+
+# 查看听写后端日志（最近 50 行）
+asr-logs:
+    @tail -n 50 /home/lawrence/.local/state/qwen3-asr/server.log

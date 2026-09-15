@@ -15,6 +15,9 @@ cache/
 # Node modules in skills
 **/node_modules/
 
+# Python bytecode (extensions/dictation ships PEP 723 scripts run by uv)
+__pycache__/
+
 # Local upstream/reference checkouts; the active extensions are versioned under
 # extensions/. See old/README.md before removing these local archives.
 old/pi-interactive-subagents-upstream/

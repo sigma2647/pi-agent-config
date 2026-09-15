@@ -61,31 +61,39 @@ pi-dictation keytest        # 按几次 ctrl+r（含一次按住再松开），�
 ## 安装与依赖
 
 ```bash
-npm install --prefix extensions/dictation   # 依赖 sherpa-onnx (WASM，约 15 MB)、类型检查用的 devDependencies
-cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
+npm ci --prefix extensions/dictation   # 依赖 sherpa-onnx-node（原生插件，npm 按平台自动选二进制包）
+cd ~/pi-agent-config && just install   # 链接 pi-dictation 到 ~/.local/bin
 ```
+
+**新机器（换台电脑 / 新容器）的完整步骤看 [`../../DEPLOY.md`](../../DEPLOY.md) 的「pi-dictation 语音输入」一节**：系统依赖、平台限制（要 glibc，musl 不行）、模型下载、验证命令都在那里。
 
 `npm run check` 用 `tsconfig.json` 做类型检查。devDependencies 里的 pi 类型包只给检查用：运行时这些模块由 pi 自己提供（它会把 `@earendil-works/*` 和 `typebox` 指向自带的副本），所以本地那几份不会被加载。
 
-模型文件在、但 `sherpa-onnx` 没装时，`/dictation doctor`、`/dictation status` 和转写报错都会写明修复命令，不会等到录完音才失败。
+模型文件在、但 `sherpa-onnx-node` 没装（或没装到平台二进制）时，`/dictation doctor`、`/dictation status` 和转写报错都会写明修复命令，不会等到录完音才失败。
 
 录制的后端需要一个：`ffmpeg`（推荐）、`pw-record`、`arecord` 或 `sox`。模型下载/解压需要系统 `tar` 和 `bzip2`。
 
 ## 本地模型（离线）
 
-内置三个模型，同一时间用一个（`providers.local.model`）：
+内置四个模型，同一时间用一个（`providers.local.model`）：
 
 | id | 特点 | 大小 | 速度 |
 |---|---|---|---|
 | `sense-voice-small`（默认） | 中英日韩粤，自带标点，识别完再出结果 | 155 MB | 约 0.1 RTF |
-| `fire-red-asr2-ctc-zh-en` | 中文最准（含 20 多种方言），**不出标点**，单段最多 60 秒 | 496 MB | 约 0.3 RTF |
+| `fun-asr-nano` | 中英日，**小声说话（耳语）和难中文都明显更准**，不出标点，单段最多 25 秒 | 802 MB | 约 0.5–0.8 RTF，比 SenseVoice 慢 5–8 倍 |
+| `fire-red-asr2-ctc-zh-en` | 中文（含 20 多种方言），**不出标点**，单段最多 60 秒；实测不如 SenseVoice，见 `docs/asr-model-selection.md` | 496 MB | 约 0.3 RTF |
 | `x-asr-480ms-zh-en-punct` | 中英，**边说边出字**，自带标点 | 127 MB | 约 0.1 RTF，第一批字 0.2 秒 |
 
 短句（几秒）和长句（一分钟以上）谁更准不一样，实测数据见 `docs/asr-model-selection.md`。
 
+**小声说话用 `fun-asr-nano`。**耳语没有基频，其他三个中文模型会把「低语」听成「地域 / 地狱 / 地语」；`fun-asr-nano` 在同样的音频上字错率 6.3%，其余是 20–25%。实测见 `docs/asr-model-selection.md` 第 11 节，判断一段录音是不是耳语用 `scripts/whisper-probe.py`。
+
+**它的代价是速度**：WASM 运行时单线程，0.6B 解码器逐字生成，实测 RTF 0.46（短句）到 0.81（20 秒），SenseVoice 是 0.10。同机实测换原生插件能快约 4 倍，但会引入平台相关二进制，与「离线无原生编译」的前提冲突（见第 11.6 节，尚未采用）。
+
 ```bash
 /dictation model                          # 查看模型状态（会标出哪个在用、怎么切换）
 /dictation model download                 # 下载 SenseVoice Small（约 155 MB，解压后约 385 MB）
+/dictation model download fun-asr-nano    # 下载耳语/难中文更准的模型（约 802 MB，解压后约 949 MB）
 /dictation model download x-asr-480ms-zh-en-punct   # 下载流式模型
 /dictation model use x-asr-480ms-zh-en-punct        # 切到流式模型
 /dictation model delete                   # 删除模型与压缩包
@@ -96,14 +104,14 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 
 - 目录：`~/.pi/agent/dictation-models/<模型 id>/`（可用 `PI_DICTATION_MODELS_DIR` 改）。
 - 语言：SenseVoice 支持 中文 / English / 日本語 / 한국어 / 粤语，自动识别；流式模型支持中英混合。
-- 速度：约 0.1 RTF（10 秒录音约 1 秒识别，首次会多 ~0.5 秒加载模型）。
-- 内存：模型常驻约 500 MB，进程退出才释放。离线模型是 WASM，无原生编译、无联网。
+- 速度：`sense-voice-small` 约 0.04 RTF（10 秒录音约 0.4 秒识别，首次多 ~0.5 秒加载模型）；`fun-asr-nano` 约 0.21 RTF（0.6B 解码器逐字生成，慢得多）。
+- 内存：模型常驻约 500 MB（`fun-asr-nano` 约 1 GB），进程退出才释放。离线模型跑 **原生 `sherpa-onnx-node` 插件**（按平台自动装二进制），不联网。
 
 ### 流式模型：边说边出字
 
 选 `x-asr-480ms-zh-en-punct` 后，录音时识别出的字**从当前光标处写进输入框**（ASR 改词就替换这一段）。光标默认跟在新字后面。方向键或鼠标把光标从这段活字末尾挪开后，已写出的字留在原地，只有新说的字插到新光标；Ctrl+U 清空后已删的字不会写回。Esc 只停止录音，已写入的字全部留下。没有 TUI 时（`/dictation test`）仍画在输入框上方的「实时」行。
 
-- 流式模型比 SenseVoice 略不准（同一个词可能听错），换来的是即时反馈。二者都是约 0.1 RTF。
+- 流式模型比 SenseVoice 略不准（同一个词可能听错），换来的是即时反馈。
 - 内存：流式模型加载后常驻约 400 MB（实测 RSS，SenseVoice 约 500 MB），进程退出才释放。
 - 用**流式模型**转写文件时，文件会被当成一段很长的录音送进同一个识别器，结果和实时听写一致。
 - `/dictation model use` / `pi-dictation model use` / `/dictation provider` 会写回 `dictation.json`。
@@ -111,10 +119,10 @@ cd ~/pi-agent-config && just install      # 链接 pi-dictation 到 ~/.local/bin
 
 ### 本地大模型：Qwen3-ASR（最准，需要另外起一个服务）
 
-Qwen3-ASR 是实测里中文最准的模型，但权重（0.6B 约 1.2 GB、1.7B 约 3.4 GB）超过 WASM 运行时能承受的范围，装不进扩展。做法是把它当成**本机的一个 OpenAI 兼容服务**，扩展侧只加一条配置：
+Qwen3-ASR 是实测里中文最准的模型，但权重（0.6B 约 1.2 GB、1.7B 约 3.4 GB）太大，装不进扩展进程。做法是把它当成**本机的一个 OpenAI 兼容服务**，扩展侧只加一条配置：
 
 ```bash
-uv run --torch-backend=cpu scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
+uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 ```
 
 ```json

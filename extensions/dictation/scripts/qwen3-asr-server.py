@@ -25,10 +25,11 @@ endpoint keeps the extension unchanged: a local server is just another
 Run it (CPU is enough; a GPU is optional). `uv` builds the environment on the
 first run, so nothing has to be installed by hand:
 
-    uv run --torch-backend=cpu scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
+    uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 
-(without `--torch-backend=cpu`, the inline metadata below already pins PyTorch
-to the CPU wheel — the flag just makes it explicit)
+(The inline metadata below already pins PyTorch to the CPU wheel, so no extra flag
+is needed. `--torch-backend=cpu` used to be documented here, but uv 0.12.13 does
+not accept it — it fails with "unexpected argument '--torch-backend'".)
 
 First run downloads the weights into the Hugging Face cache (about 3.4 GB for
 1.7B, 1.2 GB for 0.6B) and loads them once — allow about a minute before the

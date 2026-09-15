@@ -17,7 +17,7 @@ import { localModelSpec, modelDir, type LocalModelSpec } from "./catalog.ts";
 import { localFamily } from "./families/index.ts";
 import { modelState } from "./model.ts";
 import { createStreamingSession } from "./streaming.ts";
-import { loadSherpa, type SherpaModule, type SherpaOfflineRecognizer, type SherpaOfflineStream, type SherpaWave } from "./sherpa.ts";
+import { LOCAL_NUM_THREADS, loadSherpa, type SherpaModule, type SherpaOfflineRecognizer, type SherpaOfflineStream, type SherpaWave } from "./sherpa.ts";
 import { normalizeLanguage, type SttProvider } from "../providers/types.ts";
 
 const recognizers = new Map<string, Promise<SherpaOfflineRecognizer>>();
@@ -42,7 +42,7 @@ export const loadRecognizer = async (modelId: string, sherpa?: SherpaModule): Pr
     return runtime.createOfflineRecognizer({
       modelConfig: {
         ...modelConfig,
-        numThreads: 1,
+        numThreads: LOCAL_NUM_THREADS,
         provider: "cpu",
         debug: 0,
       },
@@ -113,9 +113,11 @@ export const readWave = (runtime: SherpaModule, audioPath: string): SherpaWave =
 };
 
 /**
- * Some families abort the whole WebAssembly runtime on long input (FireRedASR2
- * CTC above about 90 s, measured). Refusing up front keeps the process alive and
- * tells the user what to do instead of losing the transcription to a crash.
+ * Some families cannot decode arbitrarily long input: FireRedASR2 CTC makes ONNX
+ * Runtime throw an uncaught exception above a few minutes, which aborts the whole
+ * process (measured: 150 s fine, 272 s fatal). Refusing up front keeps the
+ * process alive and tells the user what to do instead of losing the
+ * transcription to a crash.
  */
 const assertWithinLimit = (spec: LocalModelSpec, wave: SherpaWave): void => {
   const limit = spec.maxSeconds;

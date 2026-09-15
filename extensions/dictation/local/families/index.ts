@@ -8,6 +8,7 @@
 
 import type { LocalModelSpec } from "../catalog.ts";
 import { fireRedAsrCtcFamily } from "./fire-red-asr-ctc.ts";
+import { funAsrNanoFamily } from "./fun-asr-nano.ts";
 import { senseVoiceFamily } from "./sense-voice.ts";
 import { streamingZipformerFamily } from "./streaming-zipformer.ts";
 import type { LocalFamily } from "./types.ts";
@@ -17,6 +18,7 @@ export type LocalFamilyId = NonNullable<LocalModelSpec["family"]>;
 export const LOCAL_FAMILIES: Record<LocalFamilyId, LocalFamily> = {
   "sense-voice": senseVoiceFamily,
   "fire-red-asr-ctc": fireRedAsrCtcFamily,
+  "fun-asr-nano": funAsrNanoFamily,
   "streaming-zipformer": streamingZipformerFamily,
 };
 

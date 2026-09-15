@@ -25,7 +25,7 @@ export type LocalModelSpec = {
    */
   kind: "offline" | "streaming";
   /** Which sherpa-onnx family reads these files. Missing means `sense-voice`. */
-  family?: "sense-voice" | "fire-red-asr-ctc" | "streaming-zipformer";
+  family?: "sense-voice" | "fire-red-asr-ctc" | "fun-asr-nano" | "streaming-zipformer";
   /** Offline weights (`kind: "offline"`). */
   weights?: string;
   /** Streaming transducer parts (`kind: "streaming"`). */
@@ -34,6 +34,11 @@ export type LocalModelSpec = {
   joiner?: string;
   /** Token table handed to sherpa-onnx. */
   tokens?: string;
+  /** Multi-file LLM-style families (`fun-asr-nano`): encoder adaptor, LLM decoder, embedding, and a tokenizer directory. */
+  encoderAdaptor?: string;
+  llm?: string;
+  embedding?: string;
+  tokenizer?: string;
   /**
    * Longest recording this model survives in the local runtime, in seconds.
    * Some families abort the whole WebAssembly module on longer input, so the
@@ -68,9 +73,37 @@ export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
     family: "fire-red-asr-ctc",
     weights: "model.int8.onnx",
     tokens: "tokens.txt",
-    // Measured: 60 s decodes, 90 s aborts the WebAssembly module (memory), so
-    // this is the highest round number known to work.
+    // Measured on the native runtime: 83 s and 150 s decode fine, 272 s makes
+    // ONNX Runtime throw an uncaught exception that kills the whole process.
+    // The exact boundary is unknown, so this stays at the last round number
+    // comfortably inside the safe zone.
     maxSeconds: 60,
+  },
+  // Small and whisper-aware: a SenseVoice encoder driving a Qwen3-0.6B decoder.
+  // On the wEar Chinese whisper test set it is the best model in this catalog
+  // (2.75% CER, against 15.41% for GLM-ASR-Nano and 16.33% for Whisper large-v3),
+  // and it is the only one measured on whispered speech at all — see
+  // docs/asr-model-selection.md §11.
+  "fun-asr-nano": {
+    id: "fun-asr-nano",
+    label: "Fun-ASR-Nano (int8)",
+    languages: "中英日",
+    sizeMb: 802,
+    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2",
+    kind: "offline",
+    family: "fun-asr-nano",
+    encoderAdaptor: "encoder_adaptor.int8.onnx",
+    llm: "llm.int8.onnx",
+    embedding: "embedding.int8.onnx",
+    tokenizer: "Qwen3-0.6B",
+    // This export was converted with `max_total_len=512` (audio frames + output
+    // tokens in one budget), so long input does not crash — sherpa-onnx prints a
+    // warning and returns an EMPTY transcript. Measured: the 20.76 s fixture
+    // decodes in full, 25 s comes back truncated, 30 s and above come back empty.
+    // Refusing up front turns that silent failure into a message. A re-export
+    // with a larger `max_total_len` exists at
+    // https://modelscope.cn/models/zengshuishui/FunASR-nano-onnx/ if needed.
+    maxSeconds: 25,
   },
   // A streaming zipformer: the words appear while you speak, instead of after
   // you stop. Accurate on long speech, clearly weaker on a short utterance

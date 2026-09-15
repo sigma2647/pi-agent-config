@@ -26,7 +26,10 @@ export type LocalFamily = {
  * File names live in the catalog, so a family reads them instead of hard-coding
  * them twice — and a catalog that forgets one says which entry is broken.
  */
-export const specFile = (spec: LocalModelSpec, key: "weights" | "tokens" | "encoder" | "decoder" | "joiner"): string => {
+export const specFile = (
+  spec: LocalModelSpec,
+  key: "weights" | "tokens" | "encoder" | "decoder" | "joiner" | "encoderAdaptor" | "llm" | "embedding" | "tokenizer",
+): string => {
   const file = spec[key];
   if (!file) throw new Error(`local model ${spec.id} is missing its "${key}" file entry in the catalog`);
   return file;

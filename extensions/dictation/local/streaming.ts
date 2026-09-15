@@ -4,18 +4,19 @@
  * The recognizer is created once per model and cached — loading it costs about
  * a second, the same as the offline model. Every recording gets a fresh stream.
  *
- * Decoding is synchronous and single-threaded (the WASM build has no threads),
- * so this module never decodes on its own: the caller pushes audio and decides
- * when to `step()` (the extension does it from its UI ticker). One `step()` on
- * 0.1 s of audio costs about 10 ms, which is why the caller can run it inside
- * the render loop.
+ * `step()` is synchronous: it blocks the calling thread while it decodes, so the
+ * caller drives it from its own ticker rather than this module decoding on its
+ * own. Per 0.1 s of audio the work is spiky — most calls decode nothing and
+ * return immediately, and the 95th percentile costs about 15 ms (measured over
+ * an 11 s recording: p95 15 ms with 4 threads, 22 ms with 1). That is why the
+ * caller can run it inside the render loop.
  */
 
 import { join } from "node:path";
 import { localModelSpec, modelDir, type LocalModelSpec } from "./catalog.ts";
 import { localFamily } from "./families/index.ts";
 import { modelState } from "./model.ts";
-import { loadSherpa, type SherpaModule, type SherpaOnlineRecognizer, type SherpaOnlineStream } from "./sherpa.ts";
+import { LOCAL_NUM_THREADS, loadSherpa, type SherpaModule, type SherpaOnlineRecognizer, type SherpaOnlineStream } from "./sherpa.ts";
 
 export type StreamingSession = {
   /** Queue raw PCM16LE bytes, exactly as the recorder produces them. */
@@ -54,7 +55,7 @@ export const loadStreamingRecognizer = async (modelId: string, sherpa?: SherpaMo
     return runtime.createOnlineRecognizer({
       modelConfig: {
         ...modelConfig,
-        numThreads: 1,
+        numThreads: LOCAL_NUM_THREADS,
         provider: "cpu",
         debug: 0,
       },
