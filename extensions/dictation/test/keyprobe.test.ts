@@ -55,12 +55,19 @@ test("only flag bit 2 means key releases are reported", () => {
 test("verdict recommends hold only when releases actually arrive", () => {
   const withRelease = decodeKeyEvents(`${PRESS}${RELEASE}`);
   assert.match(keytestVerdict(withRelease, 7).text, /可以长按/);
-  assert.match(keytestVerdict(withRelease, 1).text, /不稳定/);
+  // Releases arrive but the terminal never declared bit 2: the events still
+  // win, so hold works — the verdict must not send the user to toggle.
+  assert.match(keytestVerdict(withRelease, 1).text, /hold 可用/);
+  assert.doesNotMatch(keytestVerdict(withRelease, 1).text, /toggle/);
 
   const pressOnly = decodeKeyEvents(PRESS);
   const verdict = keytestVerdict(pressOnly, undefined);
   assert.equal(verdict.sawRelease, false);
+  // No releases: hold survives on gap detection, so the verdict explains that
+  // instead of telling the user to switch modes.
   assert.match(verdict.text, /不上报按键松开/);
+  assert.match(verdict.text, /间隔判断松手/);
+  assert.doesNotMatch(verdict.text, /保持 keybindMode/);
 });
 
 test("verdict reports when the key was never pressed", () => {

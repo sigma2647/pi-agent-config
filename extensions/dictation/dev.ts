@@ -5,6 +5,7 @@
  *   pi-dictation transcribe <file> [--provider id] [--language zh] [--json]
  *   pi-dictation record [--seconds N] [--provider id]     (Enter stops early)
  *   pi-dictation model [status|download|use|delete|path] [id]
+ *   pi-dictation mode [hold|toggle]
  *   pi-dictation providers
  *   pi-dictation doctor
  *   pi-dictation config
@@ -13,9 +14,10 @@
  */
 
 import { createInterface } from "node:readline";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { createRecorder } from "./audio.ts";
-import { defaultConfigPath, ensureConfigFile, loadConfig, redactConfig, saveConfig, type DictationConfig } from "./config.ts";
+import { defaultConfigPath, ensureConfigFile, isKeybindMode, loadConfig, redactConfig, saveConfig, type DictationConfig } from "./config.ts";
 import { describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
 import { decodeKeyEvents, keytestVerdict, parseKittyFlags, type DecodedKey } from "./keyprobe.ts";
 import { DEFAULT_LOCAL_MODEL, knownModelIds } from "./local/catalog.ts";
@@ -66,6 +68,7 @@ Usage:
   pi-dictation transcribe <file> [--provider <id>] [--language <code>] [--json]
   pi-dictation record [--seconds <n>] [--provider <id>]
   pi-dictation model [status|download|use|delete|path] [<model-id>]
+  pi-dictation mode [hold|toggle]        show or switch the key mode (hold = press-and-hold)
   pi-dictation providers
   pi-dictation doctor
   pi-dictation mic                       sample the microphone and list inputs
@@ -92,6 +95,8 @@ const main = async (): Promise<number> => {
       return recordCommand(config, flags);
     case "model":
       return modelCommand(config, flags);
+    case "mode":
+      return modeCommand(config, flags.positional[0]);
     case "providers":
       return providersCommand(config, flags.json);
     case "doctor":
@@ -216,6 +221,22 @@ const modelCommand = async (config: DictationConfig, flags: Flags): Promise<numb
   return 0;
 };
 
+/** `mode` — the same key-mode switch as `/dictation mode`, for the terminal. */
+const modeCommand = (config: DictationConfig, wanted: string | undefined): number => {
+  const strings = resolveStrings(config.locale).command;
+  if (!wanted) {
+    process.stdout.write(`${strings.modeCurrent(config.keybindMode)}\n`);
+    return 0;
+  }
+  if (!isKeybindMode(wanted)) {
+    process.stderr.write(`unknown mode "${wanted}" — use hold or toggle\n`);
+    return 1;
+  }
+  saveConfig({ ...config, keybindMode: wanted });
+  process.stdout.write(`${strings.modeSet(wanted)}\n`);
+  return 0;
+};
+
 const providersCommand = (config: DictationConfig, json: boolean): number => {
   const statuses = providerStatuses(config);
   const resolved = resolveProvider(config);
@@ -331,9 +352,26 @@ const configCommand = (config: DictationConfig, json: boolean): number => {
   return 0;
 };
 
-main()
-  .then((code) => process.exit(code))
-  .catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  });
+/**
+ * Run only when this file is the entry point (directly or through the
+ * ~/.local/bin symlink). Tests import nothing from here, but the guard keeps a
+ * stray import from starting the CLI and calling process.exit.
+ */
+const invokedDirectly = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href || import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return import.meta.url === pathToFileURL(entry).href;
+  }
+})();
+
+if (invokedDirectly) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((error: unknown) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    });
+}

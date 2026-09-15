@@ -31,3 +31,6 @@ export const specFile = (spec: LocalModelSpec, key: "weights" | "tokens" | "enco
   if (!file) throw new Error(`local model ${spec.id} is missing its "${key}" file entry in the catalog`);
   return file;
 };
+
+/** The common layout: one ONNX weights file plus a token table. */
+export const weightsAndTokens = (spec: LocalModelSpec): string[] => [specFile(spec, "weights"), specFile(spec, "tokens")];

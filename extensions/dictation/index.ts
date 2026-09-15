@@ -18,12 +18,13 @@ import { createRecorder, detectRecorderTool, type RecordHandle } from "./audio.t
 import {
   defaultConfigPath,
   ensureConfigFile,
+  isKeybindMode,
   loadConfig,
   redactConfig,
   saveConfig,
   type DictationConfig,
 } from "./config.ts";
-import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, setLocalModel, transcribeFile } from "./core.ts";
+import { applyReplacements, describeLocalModels, describeModelSwitch, doctorReport, formatTranscript, micDiagnostics, notReadyHint, setLocalModel, transcribeFile } from "./core.ts";
 import { DEFAULT_LOCAL_MODEL, isStreamingModel, knownModelIds, localModelSpec } from "./local/catalog.ts";
 import { deleteModel, downloadModel, modelState } from "./local/model.ts";
 import { createStreamingSession, loadStreamingRecognizer, type StreamingSession } from "./local/streaming.ts";
@@ -116,7 +117,6 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   let ticker: ReturnType<typeof setInterval> | undefined;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let lastToggle = 0;
-  let holdUnsupported = false;
   /** True while the hotkey is down, as far as the press/repeat stream can tell. */
   let keyDown = false;
   let gapTimer: ReturnType<typeof setTimeout> | undefined;
@@ -128,6 +128,9 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     if (ctx?.hasUI) ctx.ui.notify(`${strings.product}: ${message}`, type);
     else if (type === "error") console.error(`${strings.product}: ${message}`);
   };
+
+  /** The "nothing is ready" toast plus the one-line real cause (missing runtime, missing key, …). */
+  const noProviderMessage = (): string => `${strings.error.noProvider}\n${notReadyHint(config, process.env)}`;
 
   const currentLevels = (): number[] =>
     handle ? pcmLevels(handle.readTail(TAIL_BYTES), METER_SLICES, METER_SLICE_MS, config.capture.sampleRate) : [];
@@ -239,11 +242,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
       strings = resolveStrings(config.locale);
       const resolved = resolveProvider(config);
       if (!resolved) {
-        notify(ctx, strings.error.noProvider, "error");
-        return;
-      }
-      if (resolved.config.type === "local" && !modelState(resolved.config.model).ready) {
-        notify(ctx, strings.error.noModel(resolved.config.model), "error");
+        notify(ctx, noProviderMessage(), "error");
         return;
       }
 
@@ -360,7 +359,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
 
   /** Stop hint for the status label / level meter: depends on the key mode. */
   const stopHint = (): string =>
-    config.keybindMode === "hold" && !holdUnsupported ? strings.indicator.holdHint : strings.indicator.recordingHint;
+    config.keybindMode === "hold" ? strings.indicator.holdHint : strings.indicator.recordingHint;
 
   /** A key press (or auto-repeat, which is filtered out before this point). */
   const toggle = async (ctx: ExtensionContext): Promise<void> => {
@@ -373,18 +372,13 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     }
     if (state !== "recording") return;
 
-    // In hold mode a second press means the terminal never sent the release
-    // event — fall back to press-to-toggle and say so once.
-    if (config.keybindMode === "hold" && !holdUnsupported) {
-      holdUnsupported = true;
-      notify(ctx, strings.toast.holdUnsupported, "warning");
-    }
+    // In hold mode an extra press (the release event went missing) also stops.
     await finishRecording(ctx, config.output.submitOnStop ? "send" : "insert");
   };
 
   /** Key released: hold-to-talk stops here. Ignored in toggle mode. */
   const release = async (ctx: ExtensionContext): Promise<void> => {
-    if (config.keybindMode !== "hold" || holdUnsupported || state !== "recording") return;
+    if (config.keybindMode !== "hold" || state !== "recording") return;
     lastToggle = 0;
     await finishRecording(ctx, config.output.submitOnStop ? "send" : "insert");
   };
@@ -406,7 +400,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
       if (!keyDown) return;
       keyDown = false;
       // Toggle mode only reacts to presses; holding is not a stop there.
-      if (config.keybindMode === "hold" && !holdUnsupported) void release(ctx);
+      if (config.keybindMode === "hold") void release(ctx);
     }, ms);
     gapTimer.unref?.();
   };
@@ -619,7 +613,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     }
 
     if (!resolveProvider(config)) {
-      notify(ctx, strings.error.noProvider, "warning");
+      notify(ctx, noProviderMessage(), "warning");
     }
 
     // Load a streaming model in the background: it takes about a second, and
@@ -707,14 +701,14 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   /** `/dictation mode hold|toggle` — hold is record-while-held, toggle is press-to-stop. */
   const handleMode = (param: string, ctx: ExtensionContext): void => {
     const wanted = param.trim().toLowerCase();
-    if (wanted !== "hold" && wanted !== "toggle") {
+    if (!isKeybindMode(wanted)) {
       notify(ctx, strings.command.usage, "error");
       return;
     }
     // No restart needed: every recording reloads the config.
     config = { ...config, keybindMode: wanted };
     saveConfig(config);
-    notify(ctx, strings.command.keybindSet(wanted));
+    notify(ctx, strings.command.modeSet(wanted));
     showStatus(ctx);
   };
 

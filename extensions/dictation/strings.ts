@@ -29,14 +29,11 @@ export type Strings = {
     noSpeech: string;
     tooShort: string;
     stillBusy: string;
-    /** Shown once when the terminal does not report key releases. */
-    holdUnsupported: string;
     timedOut: (seconds: number) => string;
   };
   error: {
     noKey: (provider: string, env: string) => string;
     noProvider: string;
-    noModel: (id: string) => string;
     unknownProvider: (id: string, known: string) => string;
     notRecording: string;
     alreadyRecording: string;
@@ -53,7 +50,7 @@ export type Strings = {
     failed: (detail: string) => string;
     /** How the two model kinds behave, shown in the model list. */
     kind: { offline: string; streaming: string };
-    /** Marks the model `providers.local.model` points at. */
+    /** Marks the model `providers.local.model` points at — even when it is not downloaded, the config still is. */
     active: string;
     notDownloaded: string;
     /** The list's last line: how to switch models. */
@@ -64,7 +61,9 @@ export type Strings = {
   command: {
     description: string;
     usage: string;
-    keybindSet: (mode: string) => string;
+    modeSet: (mode: string) => string;
+    /** The current key mode, printed when a switch command gets no argument. */
+    modeCurrent: (mode: string) => string;
     status: (state: string, provider: string, keybind: string, mode: string, configPath: string) => string;
     providerSet: (id: string) => string;
     providerList: (lines: string) => string;
@@ -106,13 +105,11 @@ const zh: Strings = {
     noSpeech: "没有识别到语音，请靠近麦克风重试",
     tooShort: "录音太短或没有声音，请检查麦克风设备",
     stillBusy: "上一条语音还在识别中，请稍候",
-    holdUnsupported: "这个终端（或 tmux）不上报按键松开，已改为「按一下开始、再按一下结束」。想用长按：在真正的 ghostty 窗口里直接跑 pi（不要经过 tmux），或用 pi-dictation keytest 确认",
     timedOut: (seconds) => `录音已达上限 ${seconds} 秒，自动停止`,
   },
   error: {
     noKey: (provider, env) => `语音服务 ${provider} 缺少 API Key：请设置环境变量 ${env}，或在 ~/.pi/agent/dictation.json 里填写 apiKey`,
     noProvider: "没有可用的语音服务。可以 1) 下载本地模型：/dictation model download；2) 配置云端 Key。用 /dictation doctor 查看详情",
-    noModel: (id) => `本地语音模型未下载。运行 /dictation model download 下载（约 155 MB，一次即可）`,
     unknownProvider: (id, known) => `未知的语音服务 "${id}"。可用：${known}`,
     notRecording: "当前没有在录音",
     alreadyRecording: "正在录音或识别中",
@@ -128,16 +125,17 @@ const zh: Strings = {
     deleted: (id) => `已删除本地模型 ${id}`,
     failed: (detail) => `模型操作失败：${detail}`,
     kind: { offline: "说完再出字", streaming: "边说边出字" },
-    active: "← 当前",
+    active: "← 当前配置",
     notDownloaded: "未下载",
-    switchHint: (command) => `切换：${command} model use <id>`,
+    switchHint: (command) => `切换：${command} model use <id>（未下载的先 ${command} model download <id>）`,
     switched: (id, detail, configPath) =>
       `本地模型已切到 ${id}${detail ? ` · ${detail}` : ""}\n下一次录音生效（已保存到 ${configPath}）`,
   },
   command: {
     description: "语音输入：录音、识别、模型与服务管理",
     usage: "用法：/dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|mode [hold|toggle]|test [秒数]|doctor|mic|config]",
-    keybindSet: (mode) => `按键模式已切换为 ${mode}（已保存，下一次录音生效）`,
+    modeSet: (mode) => `按键模式已切换为 ${mode}（已保存，下一次录音生效）`,
+    modeCurrent: (mode) => `当前按键模式：${mode}（切换：mode hold|toggle）`,
     status: (state, provider, keybind, mode, configPath) => `状态 ${state} · 服务 ${provider} · 快捷键 ${keybind} · 模式 ${mode} · 配置 ${configPath}`,
     providerSet: (id) => `语音服务已切换为 ${id}`,
     providerList: (lines) => `语音服务：\n${lines}`,
@@ -179,13 +177,11 @@ const en: Strings = {
     noSpeech: "No speech detected — try again closer to the microphone",
     tooShort: "Recording too short or silent — check the microphone device",
     stillBusy: "Still transcribing the previous recording",
-    holdUnsupported: "This terminal (or tmux) does not report key releases — using press-to-start / press-to-stop instead. For hold-to-talk, run pi directly in ghostty (not through tmux), or check with `pi-dictation keytest`",
     timedOut: (seconds) => `Reached the ${seconds}s limit — stopping automatically`,
   },
   error: {
     noKey: (provider, env) => `${provider} needs an API key: set ${env}, or put apiKey in ~/.pi/agent/dictation.json`,
     noProvider: "No usable speech service. Either 1) download the local model: /dictation model download, or 2) configure a cloud key. Run /dictation doctor for details",
-    noModel: (id) => `Local model ${id} is not downloaded. Run /dictation model download (~155 MB, one time)`,
     unknownProvider: (id, known) => `Unknown speech service "${id}". Available: ${known}`,
     notRecording: "Not recording right now",
     alreadyRecording: "Already recording or transcribing",
@@ -201,16 +197,17 @@ const en: Strings = {
     deleted: (id) => `Deleted local model ${id}`,
     failed: (detail) => `Model operation failed: ${detail}`,
     kind: { offline: "text after you stop", streaming: "live text while you speak" },
-    active: "← current",
+    active: "← configured",
     notDownloaded: "not downloaded",
-    switchHint: (command) => `switch: ${command} model use <id>`,
+    switchHint: (command) => `switch: ${command} model use <id> (download first: ${command} model download <id>)`,
     switched: (id, detail, configPath) =>
       `switched to ${id}${detail ? ` · ${detail}` : ""}\neffective on the next recording (saved to ${configPath})`,
   },
   command: {
     description: "Voice input: record, transcribe, manage models and services",
     usage: "Usage: /dictation [start|stop|send|cancel|status|provider <name>|model [download|use|delete|path] [id]|mode [hold|toggle]|test [seconds]|doctor|mic|config]",
-    keybindSet: (mode) => `Key mode switched to ${mode} (saved; applies to the next recording)`,
+    modeSet: (mode) => `Key mode switched to ${mode} (saved; applies to the next recording)`,
+    modeCurrent: (mode) => `Key mode: ${mode} (switch with: mode hold|toggle)`,
     status: (state, provider, keybind, mode, configPath) => `state ${state} · service ${provider} · keybind ${keybind} · mode ${mode} · config ${configPath}`,
     providerSet: (id) => `Speech service switched to ${id}`,
     providerList: (lines) => `Speech services:\n${lines}`,

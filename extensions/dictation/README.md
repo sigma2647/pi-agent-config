@@ -222,6 +222,7 @@ uv run --torch-backend=cpu scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.
 pi-dictation transcribe <file> [--provider local] [--language zh] [--json]
 pi-dictation record [--seconds 10]        # 回车提前结束
 pi-dictation model [status|download|use|delete|path]
+pi-dictation mode [hold|toggle]           # 查看 / 切换按键模式（和 /dictation mode 同一套文案）
 pi-dictation providers
 pi-dictation doctor
 pi-dictation config
@@ -243,7 +244,7 @@ pi-dictation config
 ## 测试
 
 ```bash
-npm --prefix extensions/dictation test        # 109 个测试：WAV/配置/服务/录制器/UI/模型/按键解码/麦克风诊断
+npm --prefix extensions/dictation test        # 119 个测试：WAV/配置/服务/录制器/UI/模型/按键解码/麦克风诊断/CLI 冒烟
 PI_DICTATION_LOCAL_TEST=1 npm --prefix extensions/dictation test   # 含真实模型转写（需要已下载模型）
 ```
 

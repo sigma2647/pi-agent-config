@@ -44,8 +44,14 @@ export type ProviderConfig = LocalProviderConfig | OpenAICompatibleProviderConfi
 
 export type CaptureTool = "auto" | "ffmpeg" | "pw-record" | "arecord" | "sox";
 
-/** `hold` = press to start, release to stop (needs terminal key-release events). */
-export type KeybindMode = "hold" | "toggle";
+/** The key modes, in one place: `hold` = press to start, release to stop; `toggle` = press to start, press to stop. */
+export const KEYBIND_MODES = ["hold", "toggle"] as const;
+
+export type KeybindMode = (typeof KEYBIND_MODES)[number];
+
+/** The one guard for user-supplied mode values (config file, env, slash command, CLI). */
+export const isKeybindMode = (value: unknown): value is KeybindMode =>
+  typeof value === "string" && (KEYBIND_MODES as readonly string[]).includes(value);
 
 export type CaptureConfig = {
   tool: CaptureTool;
@@ -217,7 +223,7 @@ export const loadConfig = (options: LoadConfigOptions = {}): DictationConfig => 
   const envKeybind = env.PI_DICTATION_KEYBIND?.trim();
   if (envKeybind) config.keybind = envKeybind;
   const envKeybindMode = env.PI_DICTATION_KEYBIND_MODE?.trim().toLowerCase();
-  if (envKeybindMode === "hold" || envKeybindMode === "toggle") config.keybindMode = envKeybindMode;
+  if (isKeybindMode(envKeybindMode)) config.keybindMode = envKeybindMode;
   const envLocale = env.PI_DICTATION_LOCALE?.trim().toLowerCase();
   if (envLocale === "zh" || envLocale === "en") config.locale = envLocale;
 
@@ -243,7 +249,7 @@ export const mergeConfig = (base: DictationConfig, override: Record<string, unkn
   return {
     locale: override.locale === "en" || override.locale === "zh" ? override.locale : base.locale,
     keybind: text(override.keybind) ?? base.keybind,
-    keybindMode: override.keybindMode === "toggle" || override.keybindMode === "hold" ? override.keybindMode : base.keybindMode,
+    keybindMode: isKeybindMode(override.keybindMode) ? override.keybindMode : base.keybindMode,
     provider: text(override.provider) ?? base.provider,
     providers,
     capture: { ...base.capture, ...recordSection(override.capture) } as CaptureConfig,

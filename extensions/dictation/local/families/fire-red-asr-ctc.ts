@@ -6,11 +6,11 @@
  */
 
 import { join } from "node:path";
-import { specFile, type LocalFamily } from "./types.ts";
+import { specFile, weightsAndTokens, type LocalFamily } from "./types.ts";
 
 export const fireRedAsrCtcFamily: LocalFamily = {
   id: "fire-red-asr-ctc",
-  files: (spec) => [specFile(spec, "weights"), specFile(spec, "tokens")],
+  files: weightsAndTokens,
   offline: (spec, dir) => ({
     fireRedAsrCtc: {
       model: join(dir, specFile(spec, "weights")),

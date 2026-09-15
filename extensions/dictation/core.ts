@@ -163,9 +163,11 @@ export const setLocalModel = (config: DictationConfig, id: string): SetLocalMode
 /**
  * Why the chosen service cannot run, phrased as the fix. An explicitly named
  * provider reports its own reason (a missing API key, a missing model, a
- * missing runtime); "auto" keeps the two generic next actions.
+ * missing runtime); "auto" keeps the two generic next actions. Both entry
+ * points append this to their "no service ready" message, so the hotkey error
+ * names the real cause instead of the two generic ones.
  */
-const notReadyHint = (config: DictationConfig, env: NodeJS.ProcessEnv): string => {
+export const notReadyHint = (config: DictationConfig, env: NodeJS.ProcessEnv): string => {
   const named = config.provider === "auto" ? undefined : config.providers[config.provider];
   if (named) return providerStatus(config.provider, named, env).detail;
   return `run /dictation doctor, then either "/dictation model download" or set an API key`;

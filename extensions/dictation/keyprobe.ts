@@ -90,15 +90,15 @@ export const keytestVerdict = (events: DecodedKey[], flags: number | undefined, 
     return { sawRelease, sawPress, repeatedSameKey, text: `没有检测到 ${key}：请在小工具运行期间按几次 ${key}` };
   }
   if (sawRelease && supportsKeyRelease(flags)) {
-    return { sawRelease, sawPress, repeatedSameKey, text: `可以长按：把 keybindMode 设为 "hold"` };
+    return { sawRelease, sawPress, repeatedSameKey, text: `可以长按：终端上报真实的松开事件，默认的 hold（keybindMode）直接用它` };
   }
   if (sawRelease) {
-    return { sawRelease, sawPress, repeatedSameKey, text: `收到松开事件，但终端没有声明支持（flags 缺 bit2）：长按可能不稳定，建议先用 "toggle"` };
+    return { sawRelease, sawPress, repeatedSameKey, text: `收到松开事件，但终端没有声明支持（flags 缺 bit2）：hold 可用，以收到的松开事件为准` };
   }
   return {
     sawRelease,
     sawPress,
     repeatedSameKey,
-    text: `这个终端不上报按键松开（${flags === undefined ? "未答复键盘协议查询" : `flags=${flags}`}）：保持 keybindMode="toggle"。用 tmux 时即使开了 extended-keys 也会吞掉松开事件，直接在 ghostty 里跑 pi 才行`,
+    text: `这个终端不上报按键松开（${flags === undefined ? "未答复键盘协议查询" : `flags=${flags}`}）：默认的 hold 仍可用——靠按键重复的间隔判断松手（第一次 800 毫秒，之后 300 毫秒）；tmux 会吞掉松开事件，想看真实事件就在 ghostty 里直接跑 pi`,
   };
 };
