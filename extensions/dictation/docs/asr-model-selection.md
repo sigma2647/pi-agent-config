@@ -13,9 +13,10 @@
 
 | 你的目标 | 选它 | 代价 |
 |---|---|---|
-| 离线、免费、够用（现在就是） | 保持 `SenseVoice Small int8` | 无 |
-| 离线、中文更准 | `Fun-ASR-Nano int8`（第 11 节实测：难中文 5.0%，耳语 6.3%，进程内运行） | 磁盘 +949 MB；单段最多 25 秒 |
-| 小声说话 / 耳语 | 同上 `Fun-ASR-Nano`，不要用 SenseVoice、FireRedASR2-CTC、Whisper 系或 GLM | 见第 11 节 |
+| **离线、免费、默认（现在就是）** | `Fun-ASR-Nano int8` | 不出标点；比 SenseVoice 慢约 5 倍；单段最多 25 秒 |
+| 要标点、要快、经常说超 25 秒 | `SenseVoice Small int8` | 不算真正耳语；难中文比 Fun-ASR-Nano 差 |
+| 离线、中文更准（旧建议） | ~~保持 `SenseVoice Small int8`~~ → 已被第 11 节实测推翻 | — |
+| 小声说话 / 耳语 | `Fun-ASR-Nano`，不要用 SenseVoice、FireRedASR2-CTC、Whisper 系或 GLM | 见第 11 节 |
 | 离线、中文最准（愿意等） | `Qwen3-ASR-1.7B` 跑在本机服务上 | 权重 3.4 GB；常驻约 8.5 GB 内存；CPU 上约 1× 实时 |
 | 对标豆包输入法 | 豆包 `Seed-ASR 2.0`（火山引擎） | 要新写一个 provider；按小时付费；要联网 |
 | 想先用最简单的方式试云端 | `whisper-large-v3-turbo`（Groq，已有配置） | 中文标点与专名一般；**中文耳语上不可用（16.33% CER）** |
@@ -40,8 +41,8 @@
 
 | id | 类型 | 默认模型 | 需要 | 备注 |
 |---|---|---|---|---|
-| `local` | 本地离线 | SenseVoice Small int8 | 无 | 155 MB，中/英/日/韩/粤，自带标点 |
-| `local` | 本地离线 | fun-asr-nano | 无 | 949 MB，中英日，**耳语和难中文都好**，单段最多 25 秒，见第 11 节 |
+| `local` | 本地离线 | **fun-asr-nano（默认）** | 无 | 949 MB，中英日，**耳语和难中文都好**，单段最多 25 秒，见第 11 节 |
+| `local` | 本地离线 | sense-voice-small | 无 | 155 MB，中/英/日/韩/粤，自带标点，最快 |
 | `local` | 本地离线 | fire-red-asr2-ctc-zh-en | 无 | 740 MB，中文（含 20 多种方言），不出标点，单段最多 60 秒 |
 | `local` | 本地离线 | x-asr-480ms-zh-en-punct | 无 | 127 MB，中英，**边说边出字**，精度略低于 SenseVoice |
 | `openai` | OpenAI 兼容 | `whisper-1` | `OPENAI_API_KEY` | — |
@@ -244,7 +245,8 @@ RTF 说明：0.1 表示「10 秒录音花 1 秒识别」。上面的 RTF 来自 
 
 ### 10.5 现在该怎么配
 
-1. **默认 `sense-voice-small`**：离线、155 MB、带标点，短句长句都不差。
+1. **默认 `fun-asr-nano`**（2026-09-15 起，见第 11 节）：离线、中文和小声说话都最准。代价是不出标点、单段最多 25 秒。
+2. **要标点或要快**：切到 `sense-voice-small`，155 MB、约 0.04 RTF。
 2. **要最准**：本机起服务 `uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B`，配置里加一条 `openai-compatible` 指向 `127.0.0.1`（扩展零改动）。代价是每句话等约一个音频时长。
 3. **要边说边出字**：`x-asr-480ms-zh-en-punct`，接受短句会错。
 4. `fire-red-asr2-ctc-zh-en` 留着当方言备用；在这个样本上没有优势，而且有 60 秒上限。

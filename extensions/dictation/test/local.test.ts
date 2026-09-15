@@ -20,6 +20,11 @@ import { loadSherpa } from "../local/sherpa.ts";
 
 const STREAMING_MODEL = "x-asr-480ms-zh-en-punct";
 
+// A one-file-plus-token-table model. These tests are about the file bookkeeping,
+// not about which model is the default, so they name the layout they need
+// instead of following `DEFAULT_LOCAL_MODEL` around.
+const FLAT_MODEL = "sense-voice-small";
+
 const withModelsDir = (run: (dir: string) => void | Promise<void>) => async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-dictation-models-"));
   const previous = process.env.PI_DICTATION_MODELS_DIR;
@@ -32,21 +37,35 @@ const withModelsDir = (run: (dir: string) => void | Promise<void>) => async () =
   }
 };
 
-test("modelState reports the missing files of an absent model", withModelsDir((dir) => {  const state = modelState(DEFAULT_LOCAL_MODEL);
+test("modelState reports the missing files of an absent model", withModelsDir((dir) => {  const state = modelState(FLAT_MODEL);
   assert.equal(state.ready, false);
-  assert.equal(state.dir, join(dir, DEFAULT_LOCAL_MODEL));
+  assert.equal(state.dir, join(dir, FLAT_MODEL));
   assert.deepEqual(state.missing, ["model.int8.onnx", "tokens.txt"]);
   assert.equal(modelsRoot(), dir);
 }));
 
 test("modelState is ready once every required file exists", withModelsDir((dir) => {
-  const target = modelDir(DEFAULT_LOCAL_MODEL);
+  const target = modelDir(FLAT_MODEL);
   mkdirSync(target, { recursive: true });
   writeFileSync(join(target, "model.int8.onnx"), "fake weights");
-  assert.equal(modelState(DEFAULT_LOCAL_MODEL).ready, false, "tokens.txt is still missing");
+  assert.equal(modelState(FLAT_MODEL).ready, false, "tokens.txt is still missing");
   writeFileSync(join(target, "tokens.txt"), "a 1\n");
-  assert.equal(modelState(DEFAULT_LOCAL_MODEL).ready, true);
+  assert.equal(modelState(FLAT_MODEL).ready, true);
 }));
+
+// Whatever the default is, it has to be an offline model whose family knows how
+// to build a recognizer from the files the catalog promises — otherwise a fresh
+// install downloads a model it cannot run.
+test("the default model is an offline model its family can build", () => {
+  const spec = localModelSpec(DEFAULT_LOCAL_MODEL);
+  assert.ok(spec, `the default model ${DEFAULT_LOCAL_MODEL} is in the catalog`);
+  assert.equal(spec.kind, "offline", "a default that streams would change the whole UX");
+  const family = localFamily(spec);
+  assert.ok(family.offline, `the ${family.id} family decodes a finished recording`);
+  const files = family.files(spec);
+  assert.ok(files.length > 0, "the family declares the files the download must produce");
+  for (const file of files) assert.ok(file && file.length > 0);
+});
 
 test("deleteModel removes the model directory and reports what it removed", withModelsDir(async () => {
   const target = modelDir(DEFAULT_LOCAL_MODEL);
@@ -115,7 +134,7 @@ test("every catalog entry names a family that can do what its kind claims", () =
 });
 
 test("a family says which catalog field is missing instead of silently using a broken path", () => {
-  const broken: LocalModelSpec = { ...localModelSpec(DEFAULT_LOCAL_MODEL)! };
+  const broken: LocalModelSpec = { ...localModelSpec(FLAT_MODEL)! };
   delete broken.tokens;
   assert.throws(() => localFamily(broken).files(broken), /missing its "tokens" file entry/);
 });

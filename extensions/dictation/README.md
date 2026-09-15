@@ -1,6 +1,6 @@
 # pi-dictation — 语音输入（本地模型 / 云端 API）
 
-按 `ctrl+r` 开始说话，说完再按一次，文字就插到光标处。默认优先用**本地 SenseVoice 模型**（离线、免费、不用密钥）；没有本地模型时自动用云端 API。
+按 `ctrl+r` 开始说话，说完再按一次，文字就插到光标处。默认优先用**本地模型**（离线、免费、不用密钥）——默认是 `fun-asr-nano`，中文和**小声说话**最准；没有本地模型时自动用云端 API。
 
 插到已有文字中间时会自动补空格（`hello` + 听写 + `world` 不会粘成 `helloworld`）；中文字之间不加空格。这条只在「说完再出字」（含云端）时生效：流式模型是边说边把字写在光标处，不做补空格。
 
@@ -79,20 +79,25 @@ cd ~/pi-agent-config && just install   # 链接 pi-dictation 到 ~/.local/bin
 
 | id | 特点 | 大小 | 速度 |
 |---|---|---|---|
-| `sense-voice-small`（默认） | 中英日韩粤，自带标点，识别完再出结果 | 155 MB | 约 0.1 RTF |
-| `fun-asr-nano` | 中英日，**小声说话（耳语）和难中文都明显更准**，不出标点，单段最多 25 秒 | 802 MB | 约 0.5–0.8 RTF，比 SenseVoice 慢 5–8 倍 |
+| `fun-asr-nano`（默认） | 中英日，**小声说话（耳语）和难中文都明显更准**，不出标点，单段最多 25 秒 | 802 MB | 约 0.21 RTF |
+| `sense-voice-small` | 中英日韩粤，自带标点，识别完再出结果，**最快** | 155 MB | 约 0.04 RTF |
 | `fire-red-asr2-ctc-zh-en` | 中文（含 20 多种方言），**不出标点**，单段最多 60 秒；实测不如 SenseVoice，见 `docs/asr-model-selection.md` | 496 MB | 约 0.3 RTF |
 | `x-asr-480ms-zh-en-punct` | 中英，**边说边出字**，自带标点 | 127 MB | 约 0.1 RTF，第一批字 0.2 秒 |
 
 短句（几秒）和长句（一分钟以上）谁更准不一样，实测数据见 `docs/asr-model-selection.md`。
 
-**小声说话用 `fun-asr-nano`。**耳语没有基频，其他三个中文模型会把「低语」听成「地域 / 地狱 / 地语」；`fun-asr-nano` 在同样的音频上字错率 6.3%，其余是 20–25%。实测见 `docs/asr-model-selection.md` 第 11 节，判断一段录音是不是耳语用 `scripts/whisper-probe.py`。
+**小声说话用 `fun-asr-nano`（默认就是它）。**耳语没有基频，其他三个中文模型会把「低语」听成「地域 / 地狱 / 地语」；`fun-asr-nano` 在同样的音频上字错率 6.3%，其余是 20–30%。实测见 `docs/asr-model-selection.md` 第 11 节，判断一段录音是不是耳语用 `scripts/whisper-probe.py`。
 
-**它的代价是速度**：WASM 运行时单线程，0.6B 解码器逐字生成，实测 RTF 0.46（短句）到 0.81（20 秒），SenseVoice 是 0.10。同机实测换原生插件能快约 4 倍，但会引入平台相关二进制，与「离线无原生编译」的前提冲突（见第 11.6 节，尚未采用）。
+**它的代价**：不出标点；比 SenseVoice 慢约 5 倍（0.21 对 0.04 RTF）；**单段最多 25 秒**，超了会报错而不是静默出错。想要标点、想要快、或者经常说超过 25 秒，切到 `sense-voice-small`：
+
+```bash
+/dictation model use sense-voice-small
+```
 
 ```bash
 /dictation model                          # 查看模型状态（会标出哪个在用、怎么切换）
-/dictation model download                 # 下载 SenseVoice Small（约 155 MB，解压后约 385 MB）
+/dictation model download                 # 下载默认模型（fun-asr-nano，约 802 MB，解压后约 949 MB）
+/dictation model download sense-voice-small  # 下载快而带标点的那个（约 155 MB，解压后约 385 MB）
 /dictation model download fun-asr-nano    # 下载耳语/难中文更准的模型（约 802 MB，解压后约 949 MB）
 /dictation model download x-asr-480ms-zh-en-punct   # 下载流式模型
 /dictation model use x-asr-480ms-zh-en-punct        # 切到流式模型
@@ -146,7 +151,7 @@ uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 
 | id | 类型 | 默认模型 | 需要的环境变量 |
 |---|---|---|---|
-| `local` | 本地模型 | SenseVoice Small | 无 |
+| `local` | 本地模型 | `fun-asr-nano` | 无 |
 | `openai` | OpenAI 兼容 | `whisper-1` | `OPENAI_API_KEY` |
 | `groq` | OpenAI 兼容 | `whisper-large-v3-turbo` | `GROQ_API_KEY` |
 | `siliconflow` | OpenAI 兼容 | `FunAudioLLM/SenseVoiceSmall` | `SILICONFLOW_API_KEY` |
@@ -182,7 +187,7 @@ uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
   "keybindMode": "toggle",
   "provider": "auto",
   "providers": {
-    "local": { "type": "local", "model": "sense-voice-small", "language": "auto" }
+    "local": { "type": "local", "model": "fun-asr-nano", "language": "auto" }
   },
   "capture": {
     "tool": "auto",

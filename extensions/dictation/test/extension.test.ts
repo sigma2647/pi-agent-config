@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
+import { DEFAULT_LOCAL_MODEL } from "../local/catalog.ts";
 
 const FAKE_FFMPEG = `#!/usr/bin/env node
 const data = Buffer.alloc(32000 * 2);
@@ -247,7 +248,7 @@ test("the /dictation model list marks the model in use and names the switch comm
     // (This harness points at an empty models dir, so every model reads as not downloaded.
     // The active marker says "配置": the model is what the config points at, not
     // a promise that it is usable right now.)
-    assert.match(message, /[✓✗] sense-voice-small ← 当前配置\n\s+[^·]+ · 说完再出字 · 未下载 ≈\d+ MB/);
+    assert.match(message, new RegExp(`[✓✗] ${DEFAULT_LOCAL_MODEL} ← 当前配置\\n\\s+[^·]+ · 说完再出字 · 未下载 ≈\\d+ MB`));
     assert.match(message, /✗ x-asr-480ms-zh-en-punct\n\s+[^·]+ · 边说边出字 · 未下载 ≈\d+ MB/);
     assert.match(message, /切换：\/dictation model use <id>/);
     assert.match(message, /未下载的先 \/dictation model download <id>/);

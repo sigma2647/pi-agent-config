@@ -262,7 +262,7 @@ test("a too-short cloud recording is skipped instead of uploaded", async () => {
 
 test("describeModelSwitch says which model, what it changes, and when it applies", () => {
   const message = describeModelSwitch(DEFAULT_LOCAL_MODEL, "/tmp/dictation.json", resolveStrings("zh").model);
-  assert.match(message, /已切到 sense-voice-small/);
+  assert.match(message, new RegExp(`已切到 ${DEFAULT_LOCAL_MODEL}`));
   assert.match(message, /说完再出字/, "the capability change is the part the user cannot guess");
   assert.match(message, /下一次录音生效/);
   assert.match(message, /\/tmp\/dictation\.json/);

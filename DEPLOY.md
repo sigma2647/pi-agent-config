@@ -241,8 +241,8 @@ pi-dictation doctor         # 应全绿
 
 ```bash
 pi-dictation model                              # 看有哪些、哪个在用
-pi-dictation model download sense-voice-small   # 155 MB，默认，快（0.04 RTF）
-pi-dictation model download fun-asr-nano        # 802 MB，小声说话/难中文最准，慢（0.21 RTF）
+pi-dictation model download                     # 下默认那个（fun-asr-nano，802 MB）
+pi-dictation model download sense-voice-small   # 快而带标点的替代品（155 MB，0.04 RTF）
 ```
 
 模型放在 `~/.pi/agent/dictation-models/`（可用 `PI_DICTATION_MODELS_DIR` 改），全装约 2 GB（含解压与压缩包缓存）。**不需要 GPU，识别过程不联网。**
@@ -340,6 +340,12 @@ if [ -f "$HOME/.pi/agent/dictation-models/sense-voice-small/model.int8.onnx" ]; 
   echo "sense-voice-small ok"
 else
   echo "! 模型未下载：pi-dictation model download sense-voice-small"
+fi
+
+if [ -f "$HOME/.pi/agent/dictation-models/fun-asr-nano/llm.int8.onnx" ]; then
+  echo "fun-asr-nano ok"
+else
+  echo "! 默认模型未下载：pi-dictation model download"
 fi
 
 echo ""

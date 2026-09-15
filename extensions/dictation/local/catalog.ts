@@ -123,7 +123,16 @@ export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
   },
 };
 
-export const DEFAULT_LOCAL_MODEL = "sense-voice-small";
+/**
+ * The model a fresh config uses and the one `model download` fetches with no id.
+ *
+ * Fun-ASR-Nano over SenseVoice: it is the more accurate of the two on ordinary
+ * Chinese (5.0% vs 7.9% CER on the hard fixture) and the only one that survives
+ * whispered speech, which is why it is worth its costs — no punctuation, about
+ * five times slower, and a 25 s ceiling on one recording (`maxSeconds` above).
+ * SenseVoice stays installed as the fast, punctuated alternative.
+ */
+export const DEFAULT_LOCAL_MODEL = "fun-asr-nano";
 
 export const localModelSpec = (id: string): LocalModelSpec | undefined => LOCAL_MODELS[id];
 
