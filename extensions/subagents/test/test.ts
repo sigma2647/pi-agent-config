@@ -24,6 +24,11 @@ import {
   isUsableHerdrPane,
   parseHerdrPaneCurrent,
   parseHerdrPaneSplit,
+  parseHerdrPaneLayout,
+  parseHerdrTabRootPane,
+  parseTmuxPaneWidth,
+  canSplitPaneAtWidth,
+  MIN_SUBAGENT_PANE_WIDTH,
   mergeHerdrScreenSources,
   parseCmuxFocusedSnapshot,
   parseCmuxFocusedSnapshotFromJson,
@@ -2579,6 +2584,54 @@ describe("cmux.ts", () => {
     it("includes the visible viewport when recent scrollback is empty", () => {
       const screen = mergeHerdrScreenSources("", "__SUBAGENT_DONE_0__\n%", 5);
       assert.match(screen, /__SUBAGENT_DONE_0__/);
+    });
+
+    it("reads a pane's width and workspace from a real layout payload", () => {
+      // Captured from `herdr pane layout --pane wD2:pP`.
+      const raw =
+        '{"id":"cli:pane:layout","result":{"layout":{"area":{"height":46,"width":158,"x":0,"y":0},' +
+        '"panes":[{"focused":true,"pane_id":"wD2:p1","rect":{"height":46,"width":106,"x":0,"y":0}},' +
+        '{"focused":false,"pane_id":"wD2:pP","rect":{"height":46,"width":52,"x":106,"y":0}}],' +
+        '"tab_id":"wD2:t1","workspace_id":"wD2"},"type":"pane_layout"}}';
+      assert.deepEqual(parseHerdrPaneLayout(raw, "wD2:pP"), {
+        width: 52,
+        workspaceId: "wD2",
+      });
+      // A pane that is not in that layout has no measurable width, but the workspace still resolves.
+      assert.deepEqual(parseHerdrPaneLayout(raw, "wD2:zz"), {
+        width: null,
+        workspaceId: "wD2",
+      });
+      assert.deepEqual(parseHerdrPaneLayout("not json", "wD2:pP"), {
+        width: null,
+        workspaceId: null,
+      });
+    });
+
+    it("reads the root pane of a real tab-create payload", () => {
+      // Captured from `herdr tab create --workspace wD4 --cwd /tmp`.
+      const raw =
+        '{"id":"cli:tab:create","result":{"root_pane":{"cwd":"/tmp","pane_id":"wD4:p4","tab_id":"wD4:t4"},' +
+        '"tab":{"label":"pi-test-guard","tab_id":"wD4:t4"},"type":"tab_created"}}';
+      assert.equal(parseHerdrTabRootPane(raw), "wD4:p4");
+      assert.equal(parseHerdrTabRootPane("created pane wD4:p5"), "wD4:p5");
+      assert.equal(parseHerdrTabRootPane('{"result":{"tab":{}}}'), null);
+    });
+
+    it("reads a tmux pane width", () => {
+      assert.equal(parseTmuxPaneWidth("52\n"), 52);
+      assert.equal(parseTmuxPaneWidth(" 1"), 1);
+      assert.equal(parseTmuxPaneWidth("0"), null);
+      assert.equal(parseTmuxPaneWidth("abc"), null);
+      assert.equal(parseTmuxPaneWidth(""), null);
+    });
+
+    it("refuses to split a pane that cannot spare half its width", () => {
+      assert.equal(canSplitPaneAtWidth(null), true); // unmeasurable: keep the old behavior
+      assert.equal(canSplitPaneAtWidth(189), true);
+      assert.equal(canSplitPaneAtWidth(MIN_SUBAGENT_PANE_WIDTH * 2), true);
+      assert.equal(canSplitPaneAtWidth(MIN_SUBAGENT_PANE_WIDTH * 2 - 1), false);
+      assert.equal(canSplitPaneAtWidth(1), false);
     });
   });
 

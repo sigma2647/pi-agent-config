@@ -38,6 +38,50 @@ export function parseHerdrPaneSplit(raw: string): string | null {
   }
 }
 
+export interface HerdrPaneLayout {
+  width: number | null;
+  workspaceId: string | null;
+}
+
+/** Read one pane's width and workspace from `herdr pane layout --pane <id>`. */
+export function parseHerdrPaneLayout(raw: string, paneId: string): HerdrPaneLayout {
+  try {
+    const layout = (JSON.parse(raw) as {
+      result?: {
+        layout?: {
+          workspace_id?: unknown;
+          panes?: Array<{ pane_id?: unknown; rect?: { width?: unknown } }>;
+        };
+      };
+    }).result?.layout;
+    const width = layout?.panes?.find((pane) => pane.pane_id === paneId)?.rect?.width;
+    const workspaceId = layout?.workspace_id;
+    return {
+      width: typeof width === "number" ? width : null,
+      workspaceId: typeof workspaceId === "string" && workspaceId ? workspaceId : null,
+    };
+  } catch {
+    return { width: null, workspaceId: null };
+  }
+}
+
+/** Read the root pane of `herdr tab create`. */
+export function parseHerdrTabRootPane(raw: string): string | null {
+  try {
+    const paneId = (JSON.parse(raw) as { result?: { root_pane?: { pane_id?: unknown } } })
+      .result?.root_pane?.pane_id;
+    return typeof paneId === "string" && paneId ? paneId : null;
+  } catch {
+    return raw.match(/\b[\w-]+:p[\w-]+\b/)?.[0] ?? null;
+  }
+}
+
+/** Read `tmux display -p -t <pane> '#{pane_width}'`. */
+export function parseTmuxPaneWidth(raw: string): number | null {
+  const width = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(width) && width > 0 ? width : null;
+}
+
 const commandAvailability = new Map<string, boolean>();
 
 function hasCommand(command: string): boolean {
@@ -97,6 +141,27 @@ function currentHerdrPane(): HerdrPaneSnapshot | null {
   try {
     return parseHerdrPaneCurrent(
       execFileSync("herdr", ["pane", "current"], { encoding: "utf8" }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function herdrPaneLayout(paneId: string): HerdrPaneLayout {
+  try {
+    return parseHerdrPaneLayout(
+      execFileSync("herdr", ["pane", "layout", "--pane", paneId], { encoding: "utf8" }),
+      paneId,
+    );
+  } catch {
+    return { width: null, workspaceId: null };
+  }
+}
+
+function tmuxPaneWidth(paneId: string): number | null {
+  try {
+    return parseTmuxPaneWidth(
+      execFileSync("tmux", ["display", "-p", "-t", paneId, "#{pane_width}"], { encoding: "utf8" }),
     );
   } catch {
     return null;
@@ -801,6 +866,22 @@ function createCmuxSplitSurface(
 }
 
 /**
+ * A subagent pane is never split below this width. A split halves the parent pane, so a
+ * 16-way fan-out collapsed panes to 1 column — where pi exits on the first double-width
+ * glyph (emoji) instead of rendering. Below the limit we open a new tab or window, which
+ * starts at full width.
+ */
+export const MIN_SUBAGENT_PANE_WIDTH = 40;
+
+/**
+ * A split halves the pane, so only split when both halves stay usable.
+ * An unmeasurable width (null) keeps the previous behavior and splits anyway.
+ */
+export function canSplitPaneAtWidth(paneWidth: number | null): boolean {
+  return paneWidth === null || paneWidth >= MIN_SUBAGENT_PANE_WIDTH * 2;
+}
+
+/**
  * Create a new terminal surface for a subagent.
  *
  * For cmux: the first call creates a right-split pane; subsequent calls add
@@ -836,12 +917,20 @@ export function createSurface(name: string): string {
   }
 
   if (backend === "herdr") {
-    return createSurfaceSplit(name, "right", currentHerdrPane()?.paneId);
+    const parent = currentHerdrPane()?.paneId;
+    if (parent) {
+      const { width, workspaceId } = herdrPaneLayout(parent);
+      if (!canSplitPaneAtWidth(width)) return createHerdrSubagentTab(name, workspaceId);
+    }
+    return createSurfaceSplit(name, "right", parent);
   }
 
   // On tmux, target the parent pi's pane so splits follow the agent, not the user's focus.
   // See https://github.com/HazAT/pi-interactive-subagents/issues/12
   const fromSurface = backend === "tmux" ? process.env.TMUX_PANE : undefined;
+  if (fromSurface && !canSplitPaneAtWidth(tmuxPaneWidth(fromSurface))) {
+    return createTmuxSubagentWindow(name);
+  }
   return createSurfaceSplit(name, "right", fromSurface);
 }
 
@@ -869,6 +958,38 @@ function createSurfaceInPane(name: string, pane: string): string {
       restoreCmuxFocusSnapshot(focusSnapshot);
     }
   }
+}
+
+/**
+ * Create a full-width tab for a subagent, for when the current pane is too narrow to split.
+ */
+function createHerdrSubagentTab(name: string, workspaceId: string | null): string {
+  const args = ["tab", "create", "--cwd", process.cwd()];
+  if (workspaceId) args.push("--workspace", workspaceId);
+  const output = execFileSync("herdr", args, { encoding: "utf8" });
+  const paneId = parseHerdrTabRootPane(output);
+  if (!paneId) throw new Error(`Unexpected Herdr tab create output: ${output || "(empty)"}`);
+  try {
+    execFileSync("herdr", ["pane", "rename", paneId, name], { encoding: "utf8" });
+  } catch {
+    // Optional cosmetic rename.
+  }
+  return paneId;
+}
+
+/**
+ * Create a full-width window for a subagent, for when the current pane is too narrow to split.
+ */
+function createTmuxSubagentWindow(name: string): string {
+  const pane = execFileSync(
+    "tmux",
+    ["new-window", "-d", "-P", "-F", "#{pane_id}", "-n", name],
+    { encoding: "utf8" },
+  ).trim();
+  if (!pane.startsWith("%")) {
+    throw new Error(`Unexpected tmux new-window output: ${pane || "(empty)"}`);
+  }
+  return pane;
 }
 
 /**
