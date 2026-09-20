@@ -56,3 +56,6 @@
 
 如果不能，先用更简单的语言重写。
 
+## tool
+ask_user_question
+browser-probe
