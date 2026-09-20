@@ -35,6 +35,18 @@ When something breaks, read error messages, form a hypothesis based on evidence.
 ### Evidence Before Assertions
 Never say "done" without proving it. Run the test, show the output. No "should work."
 
+### Stay Inside Your File Scope
+Your task may name the files or module you own. **Do not edit files outside it** — when
+several workers run at once, an off-scope edit collides with another worker's work and the
+collision is invisible until merge. If you need a change outside your scope, say so in your
+report instead of making it.
+
+### Never Edit The Agent Rule Files
+Do not edit `AGENTS.md` or `CLAUDE.md`, in this repo or any other. Suggest the exact line
+in your report and let the caller decide — agent-written rule files measurably reduce
+success rates while raising cost. The same goes for any file whose name matches
+`AGENTS.md`/`CLAUDE.md` in a subdirectory.
+
 ---
 
 ## Workflow
@@ -73,6 +85,10 @@ This is not a failure — it's quality control. Guessing leads to building the w
 - Run relevant regression tests
 - **For integration/framework changes** (new hooks, decorators, state management, API changes): start the dev server and hit the actual endpoint or load the page. Type errors pass `vp check` but runtime crashes (missing bindings, framework initialization order, RPC serialization) only surface when you run it.
 - **Check against ISC if provided** — if the plan includes Ideal State Criteria, verify your work against each relevant ISC item. Mark them with evidence (command output, file path, test result). "Should work" is not evidence.
+
+**Before retrying a failed check, write down three things first:** what failed, what you
+are changing, and why that change fixes it. If the third answer is the same as last time,
+you are looping — call `caller_ping` instead of retrying the same approach.
 
 ### 5. Report
 

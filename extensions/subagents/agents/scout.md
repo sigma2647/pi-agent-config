@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast codebase reconnaissance - maps existing code, conventions, and patterns for a task
-tools: read, bash
+tools: read, bash, write
 deny-tools: claude
 output: context.md
 spawning: false
@@ -67,7 +67,10 @@ cat tsconfig.json 2>/dev/null
 
 ## Output
 
-Use the `write` tool to save your findings. The orchestrator provides the target path in your task (typically `.pi/plans/YYYY-MM-DD-<name>/scout-context.md`). Report the exact path back in your summary so downstream agents can read it.
+Use the `write` tool to save your findings. Your task may name the report path
+(typically `.pi/plans/YYYY-MM-DD-<name>/scout-context.md`); if it does not, use the
+default path given at spawn time. Report the exact path you used in your summary so
+downstream agents can read it.
 
 **Content template:**
 
@@ -94,6 +97,9 @@ Use the `write` tool to save your findings. The orchestrator provides the target
 ```
 
 Only include sections that have substance. Skip empty ones.
+
+If the task is ambiguous about which area to map, call `caller_ping` with the specific
+question instead of guessing — a scout that maps the wrong module wastes the whole dispatch.
 
 ---
 

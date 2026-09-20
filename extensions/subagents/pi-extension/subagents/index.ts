@@ -265,6 +265,7 @@ interface AgentDefaults {
   skills?: string;
   thinking?: string;
   denyTools?: string;
+  output?: string;
   spawning?: boolean;
   autoExit?: boolean;
   interactive?: boolean;
@@ -376,6 +377,7 @@ function parseAgentDefinition(content: string, fallbackName: string): AgentDefin
     skills: getFrontmatterValue(frontmatter, "skill") ?? getFrontmatterValue(frontmatter, "skills"),
     thinking: getFrontmatterValue(frontmatter, "thinking"),
     denyTools: getFrontmatterValue(frontmatter, "deny-tools"),
+    output: getFrontmatterValue(frontmatter, "output"),
     spawning: parseOptionalBoolean(getFrontmatterValue(frontmatter, "spawning")),
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
@@ -913,6 +915,77 @@ function updateWidget() {
     },
     { placement: "aboveEditor" },
   );
+}
+
+/** Slugify a display name for use inside a generated file name. */
+function slugifyName(name: string, fallback: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "") // strip everything except alphanumeric, spaces, hyphens
+    .replace(/\s+/g, "-") // spaces to hyphens
+    .replace(/-+/g, "-") // collapse multiple hyphens
+    .replace(/^-|-$/g, ""); // trim leading/trailing hyphens
+  return slug || fallback;
+}
+
+/** Timestamp slug used inside generated artifact file names. */
+function artifactTimestamp(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+/**
+ * Resolve the report path for an agent that declares `output:` in frontmatter.
+ *
+ * The declared value is a bare file name used as a suffix; the directory is
+ * always the current session's artifact dir, so a child can never write its
+ * report into the caller's working tree by accident. Returns null when the
+ * agent has no output contract (that agent returns prose only).
+ */
+function resolveReportPath(
+  output: string | undefined,
+  artifactDir: string,
+  agentName: string,
+  timestamp: string,
+): string | null {
+  if (!output) return null;
+  const base = output.split("/").pop() || "report.md";
+  return join(artifactDir, "reports", `${slugifyName(agentName, "subagent")}-${timestamp}-${base}`);
+}
+
+/**
+ * Instruction block for agents that own an output file.
+ *
+ * This is the whole contract: the report goes to the file, and the final
+ * message stays short so the parent context only pays for the path plus the
+ * conclusions. Without a declared `output:`, agents return prose instead.
+ */
+function buildOutputInstruction(reportPath: string): string {
+  return [
+    `Write your full report to this exact path: ${reportPath}`,
+    "Create parent directories if needed. If your task names a report path, prefer that one.",
+    "Then keep your FINAL assistant message short: first line is the report path you used, then at most 10 lines of conclusions.",
+    "Do not paste the report into the final message — the caller reads the file.",
+  ].join("\n");
+}
+
+/**
+ * Compose the initial message handed to a child.
+ *
+ * Fork mode already inherits the conversation, so it gets the task plus the
+ * closing instruction only. Blank-session modes also get the role body and the
+ * autonomy hint. `closingInstruction` is what carries the report-path contract.
+ */
+function buildSubagentInitialTask(params: {
+  inheritsConversationContext: boolean;
+  roleBlock: string;
+  modeHint: string;
+  task: string;
+  closingInstruction: string;
+}): string {
+  if (params.inheritsConversationContext) {
+    return `${params.task}\n\n${params.closingInstruction}`;
+  }
+  return `${params.roleBlock}\n\n${params.modeHint}\n\n${params.task}\n\n${params.closingInstruction}`;
 }
 
 /**
@@ -1576,6 +1649,11 @@ export const __test__ = {
   resolveEffectiveInteractive,
   buildSubagentToolAllowlist,
   buildPiPromptArgs,
+  slugifyName,
+  artifactTimestamp,
+  resolveReportPath,
+  buildOutputInstruction,
+  buildSubagentInitialTask,
   formatWidgetRightLabel,
   observeRunningSubagent,
   resolveDenyTools,
@@ -1705,15 +1783,23 @@ async function launchSubagent(
   const summaryInstruction = agentDefs?.autoExit
     ? "Your FINAL assistant message should summarize what you accomplished."
     : "Your FINAL assistant message (before calling subagent_done or before the user exits) should summarize what you accomplished.";
+  const nameSlug = slugifyName(params.name, "subagent");
+  const runTimestamp = artifactTimestamp();
+  const reportPath = resolveReportPath(agentDefs?.output, artifactDir, params.name, runTimestamp);
+  const closingInstruction = reportPath ? buildOutputInstruction(reportPath) : summaryInstruction;
   const denySet = resolveDenyTools(agentDefs);
   const identity = agentDefs?.body ?? params.systemPrompt ?? null;
   const systemPromptMode = agentDefs?.systemPromptMode;
   const identityInSystemPrompt = systemPromptMode && identity;
   const effectiveContextFiles = resolveEffectiveContextFiles(agentDefs);
   const roleBlock = identity && !identityInSystemPrompt ? `\n\n${identity}` : "";
-  const fullTask = inheritsConversationContext
-    ? params.task
-    : `${roleBlock}\n\n${modeHint}\n\n${params.task}\n\n${summaryInstruction}`;
+  const fullTask = buildSubagentInitialTask({
+    inheritsConversationContext,
+    roleBlock,
+    modeHint,
+    task: params.task,
+    closingInstruction,
+  });
   // ── Claude Code CLI path ──
   if (agentDefs?.cli === "claude") {
     const sentinelFile = `/tmp/pi-claude-${id}-done`;
@@ -1748,12 +1834,7 @@ async function launchSubagent(
     const cdPrefix = effectiveCwd ? `cd ${shellEscape(effectiveCwd)} && ` : "";
     const command = `${cdPrefix}${cmdParts.join(" ")}; echo '__SUBAGENT_DONE_'$?'__'`;
 
-    const launchScriptName = `${(params.name || "subagent")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "") || "subagent"}-${id}.sh`;
+    const launchScriptName = `${slugifyName(params.name, "subagent")}-${id}.sh`;
     const launchScriptFile = join(artifactDir, "subagent-scripts", launchScriptName);
 
     sendLongCommand(surface, command, {
@@ -1888,14 +1969,7 @@ async function launchSubagent(
   if (launchBehavior.taskDelivery === "direct") {
     taskArg = fullTask;
   } else {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const safeName = params.name
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "") // strip everything except alphanumeric, spaces, hyphens
-      .replace(/\s+/g, "-") // spaces to hyphens
-      .replace(/-+/g, "-") // collapse multiple hyphens
-      .replace(/^-|-$/g, ""); // trim leading/trailing hyphens
-    const artifactName = `context/${safeName || "subagent"}-${timestamp}.md`;
+    const artifactName = `context/${nameSlug}-${runTimestamp}.md`;
     const artifactPath = join(artifactDir, artifactName);
     mkdirSync(dirname(artifactPath), { recursive: true });
     writeFileSync(artifactPath, fullTask, "utf8");
@@ -1916,12 +1990,7 @@ async function launchSubagent(
 
   const piCommand = cdPrefix + envPrefix + parts.join(" ");
   const command = `${piCommand}; echo '__SUBAGENT_DONE_'$?'__'`;
-  const launchScriptName = `${(params.name || "subagent")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "subagent"}-${id}.sh`;
+  const launchScriptName = `${slugifyName(params.name, "subagent")}-${id}.sh`;
   const launchScriptFile = join(artifactDir, "subagent-scripts", launchScriptName);
   sendLongCommand(surface, command, {
     scriptPath: launchScriptFile,

@@ -131,6 +131,39 @@ in every task, state the exact shape you want:
 When the result lands, reason from the **summary only**. Do not paste a child's
 raw dump back into your own thinking; that re-imports the cost you just avoided.
 
+### Reports go in files, not in the summary
+
+The four report-producing agents (`scout`, `researcher`, `reviewer`,
+`visual-tester`) declare `output:` in their frontmatter. At spawn the runtime
+hands the child an exact report path and tells it to put the long version there
+and keep the final message to that path plus ~10 lines. That is where the bulk
+of the saving comes from — a report that arrives as prose is paid for twice,
+once by the child and once by every later turn of your session.
+
+- To send a report somewhere specific (a plan dir the user will read), name the
+  path in the task; the child prefers it over the runtime default.
+- **Do not ask a child to also paste the report into its summary.** In every
+  dispatch, the summary is the index and the file is the content.
+- Read the file yourself only when you actually need its detail. Otherwise the
+  path in the summary is enough to hand onward to a worker or the user.
+
+### Write scope: one writer per artifact
+
+Two agents writing at once is how you get conflicting implicit decisions — the
+failure mode with no error message. So:
+
+- Parallel dispatches are for **read-only** work: scout, researcher, reviewer,
+  visual-tester. Those never conflict.
+- A writing agent — `worker` — is either **alone**, or given a file set the
+  other writers do not touch. State the owned files explicitly in each task.
+- Never split one coherent artifact (a document, a module's public interface, a
+  single refactor) across parallel writers. Pieces written to different
+  assumptions do not join back together.
+- If two writers must touch the same repo, give each a git worktree and merge
+  afterwards. Pane-level isolation is not file-level isolation.
+- `worker` does not edit `AGENTS.md`/`CLAUDE.md`; it proposes lines in its report
+  and you apply them.
+
 ## Fork vs standalone
 
 - **standalone** (default): fresh window, no parent conversation. Cheapest for
@@ -170,6 +203,30 @@ same turn** — they run concurrently.
   is more results to reconcile.
 - Do not spawn subagents merely to parallelize plain I/O — several `web_fetch`
   or `read` calls in one turn already run in parallel.
+
+### Size the dispatch to the task
+
+Over-dispatching burns panes and reconciliation; under-dispatching burns your
+context. Scale like this:
+
+| Task shape | Agents | Guidance |
+|-----------|--------|----------|
+| One fact, one known question | 1 | No fan-out. One scout or reviewer answers it. |
+| A few independent areas | 2–4 | One agent per area, same turn, distinct briefs. |
+| Broad sweep across a large surface | 5+ | Split by surface, not by hope. Each brief names its own area. |
+
+Two agents reading the same area is waste. Three agents each returning prose that
+should have been one file is worse.
+
+### Verify, do not assume
+
+The bottleneck on generated work is verification, not generation. So:
+
+- Pair a reviewer with every 3–4 workers, and before any change is called done.
+- Want a standing gate? Spawn one long-lived reviewer for the session and keep
+  pointing it at each new diff.
+- A worker's own "tests pass" is a claim, not evidence. Ask for the command and
+  the line that proves it.
 
 ## Context-budget escalation
 

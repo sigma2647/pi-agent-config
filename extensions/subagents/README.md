@@ -350,6 +350,7 @@ Call `subagents_list` to see the active pool (including which entries are in coo
 | `session-mode` | string | Default child-session mode: `standalone`, `lineage-only`, or `fork` |
 | `spawning`    | boolean | Set `false` to deny all subagent-spawning tools                                                                                                                                                                                                                             |
 | `deny-tools`  | string  | Comma-separated extension tool names to deny                                                                                                                                                                                                                                |
+| `output`      | string  | Declares a report file (e.g. `context.md`). At spawn the child is handed `<session-artifact-dir>/reports/<agent>-<timestamp>-<output>` and told to write the long version there and keep its final message to that path plus ~10 lines. The declared value is a file-name suffix — any directory part is ignored, so a child can never write into the caller's working tree by accident. Omit for agents that return their result directly (e.g. `worker`). |
 | `auto-exit`   | boolean | Auto-shutdown when the agent finishes its turn — no `subagent_done` call needed. If the user sends any input, auto-exit is permanently disabled and the user takes over the session. Recommended for autonomous agents (scout, worker); not for interactive ones (planner). Also determines the default value of `interactive` (see below). |
 | `interactive` | boolean | derived        | Override whether stall/recovery transitions wake the parent session. Defaults to the inverse of `auto-exit`: autonomous agents (`auto-exit: true`) are non-interactive and get stall pings; agents without `auto-exit` are interactive and stay quiet. Explicit values take precedence. |
 | `cwd`         | string  | Default working directory (absolute or relative to project root)                                                                                                                                                                                                            |
@@ -458,11 +459,14 @@ deny-tools: subagent
 
 | Agent      | `spawning`  | Rationale                                    |
 | ---------- | ----------- | -------------------------------------------- |
-| planner    | _(default)_ | Legitimately spawns scouts for investigation |
+| planner    | _(default)_ | Legitimately spawns scouts for investigation. Capped at 2 spawns, `scout`/`researcher` only |
 | worker     | `false`     | Should implement tasks, not delegate         |
 | researcher | `false`     | Should research, not spawn                   |
 | reviewer   | `false`     | Should review, not spawn                     |
 | scout      | `false`     | Should gather context, not spawn             |
+
+`scout` and `researcher` are the only agents the planner may spawn; the planner is
+therefore the only place a spawn tree can start, and it ends one level down.
 
 ---
 
