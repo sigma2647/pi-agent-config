@@ -38,31 +38,77 @@ export function parseHerdrPaneSplit(raw: string): string | null {
   }
 }
 
+export interface PaneRect {
+  paneId: string;
+  width: number;
+  height: number;
+}
+
 export interface HerdrPaneLayout {
   width: number | null;
   workspaceId: string | null;
+  panes: PaneRect[];
 }
 
-/** Read one pane's width and workspace from `herdr pane layout --pane <id>`. */
+/** Read every pane rect and the workspace from `herdr pane layout --pane <id>`. */
 export function parseHerdrPaneLayout(raw: string, paneId: string): HerdrPaneLayout {
   try {
     const layout = (JSON.parse(raw) as {
       result?: {
         layout?: {
           workspace_id?: unknown;
-          panes?: Array<{ pane_id?: unknown; rect?: { width?: unknown } }>;
+          panes?: Array<{ pane_id?: unknown; rect?: { width?: unknown; height?: unknown } }>;
         };
       };
     }).result?.layout;
-    const width = layout?.panes?.find((pane) => pane.pane_id === paneId)?.rect?.width;
+    const panes: PaneRect[] = [];
+    for (const pane of layout?.panes ?? []) {
+      if (typeof pane.pane_id !== "string") continue;
+      if (typeof pane.rect?.width !== "number" || typeof pane.rect?.height !== "number") continue;
+      panes.push({ paneId: pane.pane_id, width: pane.rect.width, height: pane.rect.height });
+    }
+    const width = panes.find((pane) => pane.paneId === paneId)?.width;
     const workspaceId = layout?.workspace_id;
     return {
       width: typeof width === "number" ? width : null,
       workspaceId: typeof workspaceId === "string" && workspaceId ? workspaceId : null,
+      panes,
     };
   } catch {
-    return { width: null, workspaceId: null };
+    return { width: null, workspaceId: null, panes: [] };
   }
+}
+
+/** Read pane-to-tab membership from `herdr pane list`. */
+export function parseHerdrPaneTabs(raw: string): Array<{ paneId: string; tabId: string }> {
+  try {
+    const panes = (JSON.parse(raw) as {
+      result?: { panes?: Array<{ pane_id?: unknown; tab_id?: unknown }> };
+    }).result?.panes;
+    const result: Array<{ paneId: string; tabId: string }> = [];
+    for (const pane of panes ?? []) {
+      if (typeof pane.pane_id !== "string" || typeof pane.tab_id !== "string") continue;
+      result.push({ paneId: pane.pane_id, tabId: pane.tab_id });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+/** Read `tmux list-panes -a -F '#{pane_id} #{pane_width} #{pane_height}'`. */
+export function parseTmuxPaneList(raw: string): PaneRect[] {
+  const rects: PaneRect[] = [];
+  for (const line of raw.split("\n")) {
+    const [paneId, width, height] = line.trim().split(/\s+/);
+    if (!paneId?.startsWith("%")) continue;
+    const w = Number.parseInt(width ?? "", 10);
+    const h = Number.parseInt(height ?? "", 10);
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      rects.push({ paneId, width: w, height: h });
+    }
+  }
+  return rects;
 }
 
 /** Read the root pane of `herdr tab create`. */
@@ -76,10 +122,13 @@ export function parseHerdrTabRootPane(raw: string): string | null {
   }
 }
 
-/** Read `tmux display -p -t <pane> '#{pane_width}'`. */
-export function parseTmuxPaneWidth(raw: string): number | null {
-  const width = Number.parseInt(raw.trim(), 10);
-  return Number.isFinite(width) && width > 0 ? width : null;
+/** Rename a Herdr pane to the subagent's name. Cosmetic: a failure never blocks the launch. */
+function renameHerdrPane(paneId: string, name: string): void {
+  try {
+    execFileSync("herdr", ["pane", "rename", paneId, name], { encoding: "utf8" });
+  } catch {
+    // Optional cosmetic rename.
+  }
 }
 
 const commandAvailability = new Map<string, boolean>();
@@ -154,17 +203,41 @@ function herdrPaneLayout(paneId: string): HerdrPaneLayout {
       paneId,
     );
   } catch {
-    return { width: null, workspaceId: null };
+    return { width: null, workspaceId: null, panes: [] };
   }
 }
 
-function tmuxPaneWidth(paneId: string): number | null {
+/**
+ * Rects of the panes we may split, across every tab that holds one of them. Tab membership
+ * comes from one `pane list`; each such tab costs one `pane layout` call.
+ */
+function herdrOwnedPanes(owned: Set<string>): PaneRect[] {
+  const tabOf = new Map<string, string>(); // tab -> one pane in it, to query the layout with
   try {
-    return parseTmuxPaneWidth(
-      execFileSync("tmux", ["display", "-p", "-t", paneId, "#{pane_width}"], { encoding: "utf8" }),
+    for (const pane of parseHerdrPaneTabs(execFileSync("herdr", ["pane", "list"], { encoding: "utf8" }))) {
+      if (owned.has(pane.paneId) && !tabOf.has(pane.tabId)) tabOf.set(pane.tabId, pane.paneId);
+    }
+  } catch {
+    return [];
+  }
+  const rects: PaneRect[] = [];
+  for (const anchor of tabOf.values()) {
+    for (const pane of herdrPaneLayout(anchor).panes) {
+      if (owned.has(pane.paneId)) rects.push(pane);
+    }
+  }
+  return rects;
+}
+
+function tmuxPaneRects(): PaneRect[] {
+  try {
+    return parseTmuxPaneList(
+      execFileSync("tmux", ["list-panes", "-a", "-F", "#{pane_id} #{pane_width} #{pane_height}"], {
+        encoding: "utf8",
+      }),
     );
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -873,12 +946,56 @@ function createCmuxSplitSurface(
  */
 export const MIN_SUBAGENT_PANE_WIDTH = 40;
 
+/** Same floor on the other axis, so a fan-out cannot squeeze rows either. */
+export const MIN_SUBAGENT_PANE_HEIGHT = 14;
+
 /**
- * A split halves the pane, so only split when both halves stay usable.
- * An unmeasurable width (null) keeps the previous behavior and splits anyway.
+ * The pane being split keeps this share and the new subagent pane takes the rest. The golden
+ * ratio keeps a tiling of many panes readable, where an even split runs out of room twice as
+ * fast.
  */
-export function canSplitPaneAtWidth(paneWidth: number | null): boolean {
-  return paneWidth === null || paneWidth >= MIN_SUBAGENT_PANE_WIDTH * 2;
+export const GOLDEN_EXISTING_SHARE = 0.618;
+
+/**
+ * Panes this process created for subagents, plus the caller. Splitting the largest of these
+ * keeps the tiling balanced and keeps the extension off panes the user arranged for other
+ * work. Stale ids are harmless: only panes found in a live layout are considered.
+ */
+const ownedSurfaces = new Set<string>();
+
+/**
+ * How much of one axis the new pane takes: the golden remainder, but never below `floor`.
+ * Returns null when the axis cannot be split without one side dropping under its floor.
+ */
+export function newPaneSize(axis: number, floor: number): number | null {
+  if (axis < floor * 2) return null;
+  return Math.max(floor, Math.round(axis * (1 - GOLDEN_EXISTING_SHARE)));
+}
+
+/**
+ * Split the longer axis, but only when both sides stay above their floors; otherwise fall back to
+ * the other axis, or refuse.
+ */
+export function splitDirectionFor(rect: PaneRect): "right" | "down" | null {
+  const canSplitRight = newPaneSize(rect.width, MIN_SUBAGENT_PANE_WIDTH) !== null;
+  const canSplitDown = newPaneSize(rect.height, MIN_SUBAGENT_PANE_HEIGHT) !== null;
+  const longest = rect.width >= rect.height ? "right" : "down";
+  const shortest = longest === "right" ? "down" : "right";
+  if (longest === "right" ? canSplitRight : canSplitDown) return longest;
+  if (shortest === "right" ? canSplitRight : canSplitDown) return shortest;
+  return null;
+}
+
+/** Largest pane we own that can still take a split, or null when the whole layout is full. */
+export function pickSplitTarget(panes: PaneRect[], owned: Iterable<string>): PaneRect | null {
+  const allowed = new Set(owned);
+  let best: PaneRect | null = null;
+  for (const pane of panes) {
+    if (!allowed.has(pane.paneId)) continue;
+    if (!splitDirectionFor(pane)) continue;
+    if (!best || pane.width * pane.height > best.width * best.height) best = pane;
+  }
+  return best;
 }
 
 /**
@@ -917,21 +1034,47 @@ export function createSurface(name: string): string {
   }
 
   if (backend === "herdr") {
-    const parent = currentHerdrPane()?.paneId;
-    if (parent) {
-      const { width, workspaceId } = herdrPaneLayout(parent);
-      if (!canSplitPaneAtWidth(width)) return createHerdrSubagentTab(name, workspaceId);
+    const caller = currentHerdrPane()?.paneId ?? null;
+    const owned = new Set(ownedSurfaces);
+    if (caller) owned.add(caller);
+    const target = pickSplitTarget(herdrOwnedPanes(owned), owned);
+    if (target) {
+      const direction = splitDirectionFor(target)!;
+      const axis = direction === "right" ? target.width : target.height;
+      const floor = direction === "right" ? MIN_SUBAGENT_PANE_WIDTH : MIN_SUBAGENT_PANE_HEIGHT;
+      const size = newPaneSize(axis, floor)!;
+      const surface = createHerdrSplit(name, target.paneId, direction, 1 - size / axis);
+      ownedSurfaces.add(surface);
+      return surface;
     }
-    return createSurfaceSplit(name, "right", parent);
+    // Every owned pane is too small to split: start a fresh tab at full width.
+    const workspaceId = caller ? herdrPaneLayout(caller).workspaceId : null;
+    const surface = createHerdrSubagentTab(name, workspaceId);
+    ownedSurfaces.add(surface);
+    return surface;
   }
 
-  // On tmux, target the parent pi's pane so splits follow the agent, not the user's focus.
-  // See https://github.com/HazAT/pi-interactive-subagents/issues/12
-  const fromSurface = backend === "tmux" ? process.env.TMUX_PANE : undefined;
-  if (fromSurface && !canSplitPaneAtWidth(tmuxPaneWidth(fromSurface))) {
-    return createTmuxSubagentWindow(name);
+  if (backend === "tmux") {
+    // On tmux, target the parent pi's pane so splits follow the agent, not the user's focus.
+    // See https://github.com/HazAT/pi-interactive-subagents/issues/12
+    const caller = process.env.TMUX_PANE;
+    const owned = new Set(ownedSurfaces);
+    if (caller) owned.add(caller);
+    const target = pickSplitTarget(tmuxPaneRects(), owned);
+    if (target) {
+      const direction = splitDirectionFor(target)!;
+      const axis = direction === "right" ? target.width : target.height;
+      const floor = direction === "right" ? MIN_SUBAGENT_PANE_WIDTH : MIN_SUBAGENT_PANE_HEIGHT;
+      const surface = createTmuxSplit(target.paneId, direction, newPaneSize(axis, floor)!);
+      ownedSurfaces.add(surface);
+      return surface;
+    }
+    const surface = createTmuxSubagentWindow(name);
+    ownedSurfaces.add(surface);
+    return surface;
   }
-  return createSurfaceSplit(name, "right", fromSurface);
+
+  return createSurfaceSplit(name, "right", undefined);
 }
 
 /**
@@ -961,7 +1104,69 @@ function createSurfaceInPane(name: string, pane: string): string {
 }
 
 /**
- * Create a full-width tab for a subagent, for when the current pane is too narrow to split.
+ * Split off a new pane, leaving the pane being split at the golden proportion.
+ */
+function createHerdrSplit(
+  name: string,
+  paneId: string,
+  direction: "right" | "down",
+  existingShare: number,
+): string {
+  const output = execFileSync(
+    "herdr",
+    [
+      "pane",
+      "split",
+      "--pane",
+      paneId,
+      "--direction",
+      direction,
+      "--ratio",
+      String(existingShare),
+      "--cwd",
+      process.cwd(),
+      "--no-focus",
+    ],
+    { encoding: "utf8" },
+  );
+  const pane = parseHerdrPaneSplit(output);
+  if (!pane) throw new Error(`Unexpected Herdr pane split output: ${output || "(empty)"}`);
+  renameHerdrPane(pane, name);
+  return pane;
+}
+
+/**
+ * Split off a new pane of an explicit size, which is how tmux takes a golden proportion.
+ */
+function createTmuxSplit(
+  paneId: string,
+  direction: "right" | "down",
+  size: number,
+): string {
+  const pane = execFileSync(
+    "tmux",
+    [
+      "split-window",
+      "-d",
+      direction === "right" ? "-h" : "-v",
+      "-l",
+      String(size),
+      "-t",
+      paneId,
+      "-P",
+      "-F",
+      "#{pane_id}",
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  if (!pane.startsWith("%")) {
+    throw new Error(`Unexpected tmux split-window output: ${pane || "(empty)"}`);
+  }
+  return pane;
+}
+
+/**
+ * Create a full-width tab for a subagent, for when no owned pane can take a split.
  */
 function createHerdrSubagentTab(name: string, workspaceId: string | null): string {
   const args = ["tab", "create", "--cwd", process.cwd()];
@@ -969,16 +1174,12 @@ function createHerdrSubagentTab(name: string, workspaceId: string | null): strin
   const output = execFileSync("herdr", args, { encoding: "utf8" });
   const paneId = parseHerdrTabRootPane(output);
   if (!paneId) throw new Error(`Unexpected Herdr tab create output: ${output || "(empty)"}`);
-  try {
-    execFileSync("herdr", ["pane", "rename", paneId, name], { encoding: "utf8" });
-  } catch {
-    // Optional cosmetic rename.
-  }
+  renameHerdrPane(paneId, name);
   return paneId;
 }
 
 /**
- * Create a full-width window for a subagent, for when the current pane is too narrow to split.
+ * Create a full-width window for a subagent, for when no owned pane can take a split.
  */
 function createTmuxSubagentWindow(name: string): string {
   const pane = execFileSync(
@@ -1437,6 +1638,7 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
  * Close a pane.
  */
 export function closeSurface(surface: string): void {
+  ownedSurfaces.delete(surface);
   const backend = requireMuxBackend();
 
   if (backend === "cmux") {

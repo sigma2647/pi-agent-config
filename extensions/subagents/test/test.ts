@@ -25,10 +25,14 @@ import {
   parseHerdrPaneCurrent,
   parseHerdrPaneSplit,
   parseHerdrPaneLayout,
+  parseHerdrPaneTabs,
   parseHerdrTabRootPane,
-  parseTmuxPaneWidth,
-  canSplitPaneAtWidth,
+  parseTmuxPaneList,
+  newPaneSize,
+  splitDirectionFor,
+  pickSplitTarget,
   MIN_SUBAGENT_PANE_WIDTH,
+  MIN_SUBAGENT_PANE_HEIGHT,
   mergeHerdrScreenSources,
   parseCmuxFocusedSnapshot,
   parseCmuxFocusedSnapshotFromJson,
@@ -2586,7 +2590,7 @@ describe("cmux.ts", () => {
       assert.match(screen, /__SUBAGENT_DONE_0__/);
     });
 
-    it("reads a pane's width and workspace from a real layout payload", () => {
+    it("reads a pane's width, workspace, and sibling rects from a real layout payload", () => {
       // Captured from `herdr pane layout --pane wD2:pP`.
       const raw =
         '{"id":"cli:pane:layout","result":{"layout":{"area":{"height":46,"width":158,"x":0,"y":0},' +
@@ -2596,16 +2600,39 @@ describe("cmux.ts", () => {
       assert.deepEqual(parseHerdrPaneLayout(raw, "wD2:pP"), {
         width: 52,
         workspaceId: "wD2",
+        panes: [
+          { paneId: "wD2:p1", width: 106, height: 46 },
+          { paneId: "wD2:pP", width: 52, height: 46 },
+        ],
       });
-      // A pane that is not in that layout has no measurable width, but the workspace still resolves.
+      // A pane that is not in that layout has no measurable width, but the siblings still resolve.
       assert.deepEqual(parseHerdrPaneLayout(raw, "wD2:zz"), {
         width: null,
         workspaceId: "wD2",
+        panes: [
+          { paneId: "wD2:p1", width: 106, height: 46 },
+          { paneId: "wD2:pP", width: 52, height: 46 },
+        ],
       });
       assert.deepEqual(parseHerdrPaneLayout("not json", "wD2:pP"), {
         width: null,
         workspaceId: null,
+        panes: [],
       });
+    });
+
+    it("maps panes to tabs from a real pane-list payload", () => {
+      const raw =
+        '{"id":"cli:pane:list","result":{"panes":[' +
+        '{"pane_id":"wD2:p1","tab_id":"wD2:t1","cwd":"/tmp"},' +
+        '{"pane_id":"wD2:pP","tab_id":"wD2:t1","cwd":"/tmp"},' +
+        '{"pane_id":"wD4:p1","tab_id":"wD4:t1","cwd":"/tmp"}],"type":"pane_list"}}';
+      assert.deepEqual(parseHerdrPaneTabs(raw), [
+        { paneId: "wD2:p1", tabId: "wD2:t1" },
+        { paneId: "wD2:pP", tabId: "wD2:t1" },
+        { paneId: "wD4:p1", tabId: "wD4:t1" },
+      ]);
+      assert.deepEqual(parseHerdrPaneTabs("nope"), []);
     });
 
     it("reads the root pane of a real tab-create payload", () => {
@@ -2618,20 +2645,57 @@ describe("cmux.ts", () => {
       assert.equal(parseHerdrTabRootPane('{"result":{"tab":{}}}'), null);
     });
 
-    it("reads a tmux pane width", () => {
-      assert.equal(parseTmuxPaneWidth("52\n"), 52);
-      assert.equal(parseTmuxPaneWidth(" 1"), 1);
-      assert.equal(parseTmuxPaneWidth("0"), null);
-      assert.equal(parseTmuxPaneWidth("abc"), null);
-      assert.equal(parseTmuxPaneWidth(""), null);
+    it("reads a tmux pane list in one shot", () => {
+      assert.deepEqual(parseTmuxPaneList("%14 97 46\n%15 60 46\n"), [
+        { paneId: "%14", width: 97, height: 46 },
+        { paneId: "%15", width: 60, height: 46 },
+      ]);
+      assert.deepEqual(parseTmuxPaneList("garbage\n%1 x y\n"), []);
     });
 
-    it("refuses to split a pane that cannot spare half its width", () => {
-      assert.equal(canSplitPaneAtWidth(null), true); // unmeasurable: keep the old behavior
-      assert.equal(canSplitPaneAtWidth(189), true);
-      assert.equal(canSplitPaneAtWidth(MIN_SUBAGENT_PANE_WIDTH * 2), true);
-      assert.equal(canSplitPaneAtWidth(MIN_SUBAGENT_PANE_WIDTH * 2 - 1), false);
-      assert.equal(canSplitPaneAtWidth(1), false);
+    it("gives the new pane the golden remainder, and never less than the floor", () => {
+      assert.equal(newPaneSize(158, 40), 60); // 38.2% of 158
+      assert.equal(newPaneSize(98, 40), 40); // golden would be 37 — the floor wins
+      assert.equal(newPaneSize(80, 40), 40); // exactly one floor per side
+      assert.equal(newPaneSize(79, 40), null);
+      assert.equal(newPaneSize(46, 14), 18);
+      assert.equal(newPaneSize(27, 14), null);
+    });
+
+    it("splits the longer axis and refuses a pane that cannot spare the floor", () => {
+      const wide = { paneId: "a", width: 158, height: 46 };
+      assert.equal(splitDirectionFor(wide), "right");
+      // Too narrow to split sideways, but tall enough to split down.
+      assert.equal(splitDirectionFor({ paneId: "b", width: 60, height: 46 }), "down");
+      assert.equal(
+        splitDirectionFor({ paneId: "c", width: MIN_SUBAGENT_PANE_WIDTH * 2 - 1, height: 46 }),
+        "down",
+      );
+      // Below both floors: refuse instead of collapsing the pane.
+      assert.equal(
+        splitDirectionFor({
+          paneId: "d",
+          width: MIN_SUBAGENT_PANE_WIDTH * 2 - 1,
+          height: MIN_SUBAGENT_PANE_HEIGHT * 2 - 1,
+        }),
+        null,
+      );
+      assert.equal(splitDirectionFor({ paneId: "e", width: 1, height: 1 }), null);
+    });
+
+    it("splits the largest pane we own, and none of the user's", () => {
+      const panes = [
+        { paneId: "mine-small", width: 61, height: 46 },
+        { paneId: "mine-big", width: 98, height: 46 },
+        { paneId: "user-nvim", width: 200, height: 46 },
+      ];
+      assert.equal(pickSplitTarget(panes, ["mine-small", "mine-big"])?.paneId, "mine-big");
+      assert.equal(pickSplitTarget(panes, ["user-nvim"])?.paneId, "user-nvim");
+      assert.equal(pickSplitTarget(panes, []), null);
+      assert.equal(
+        pickSplitTarget([{ paneId: "tiny", width: 1, height: 1 }], ["tiny"]),
+        null,
+      );
     });
   });
 
