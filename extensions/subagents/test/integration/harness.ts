@@ -73,8 +73,15 @@ const EXTENSION_SOURCE = join(PROJECT_ROOT, "pi-extension", "subagents", "index.
 
 // ── Configuration ──
 
-/** Model used for integration tests. Override with PI_TEST_MODEL env var. */
-export const TEST_MODEL = process.env.PI_TEST_MODEL ?? "anthropic/claude-haiku-4-5";
+/**
+ * Optional model override for integration-test pi sessions.
+ *
+ * Leave it unset and the test pi sessions run on the operator's configured
+ * default model. Hardcoding a model here (this used to default to
+ * `anthropic/claude-haiku-4-5`) makes the whole suite fail on any machine
+ * without a key for that provider.
+ */
+export const TEST_MODEL = process.env.PI_TEST_MODEL;
 
 /** Per-test timeout in ms. Override with PI_TEST_TIMEOUT env var. */
 export const PI_TIMEOUT = Number(process.env.PI_TEST_TIMEOUT ?? "120000");
@@ -89,7 +96,7 @@ export function getAvailableBackends(): MuxBackend[] {
   const backends: MuxBackend[] = [];
   const orig = process.env.PI_SUBAGENT_MUX;
 
-  for (const backend of ["cmux", "tmux", "zellij"] as MuxBackend[]) {
+  for (const backend of ["cmux", "tmux", "zellij", "herdr"] as MuxBackend[]) {
     process.env.PI_SUBAGENT_MUX = backend;
     try {
       if (getMuxBackend() === backend) backends.push(backend);
@@ -285,7 +292,7 @@ export function startPi(
     `pi`,
     `-ne`,
     `-e ${shellEscape(EXTENSION_SOURCE)}`,
-    `--model ${shellEscape(model)}`,
+    model ? `--model ${shellEscape(model)}` : "",
     extra,
     shellEscape(task),
   ]

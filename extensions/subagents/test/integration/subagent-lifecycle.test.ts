@@ -13,12 +13,12 @@
  *   tmux new 'npm run test:integration'
  *
  * Configuration:
- *   PI_TEST_MODEL     — model for all pi sessions (default: anthropic/claude-haiku-4-5)
+ *   PI_TEST_MODEL     — model for all pi sessions (default: the operator's configured default model)
  *   PI_TEST_TIMEOUT   — per-test timeout in ms (default: 120000)
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import {
   getAvailableBackends,
   setBackend,
@@ -38,6 +38,36 @@ import {
 } from "./harness.ts";
 
 const backends = getAvailableBackends();
+
+const SESSIONS_ROOT = `${process.env.HOME}/.pi/agent/sessions`;
+const REPORT_TIMEOUT = PI_TIMEOUT * 3;
+
+/**
+ * Poll the session store for the report file an `output:` agent should have
+ * written. The file name is `<agent-slug>-<timestamp>-<output>`, so the agent
+ * name alone is enough to find it — no need to parse screen output, which wraps
+ * long paths in narrow panes.
+ */
+async function waitForReportFile(agentName: string): Promise<string[]> {
+  const slug = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  const deadline = Date.now() + REPORT_TIMEOUT;
+  while (Date.now() < deadline) {
+    const found: string[] = [];
+    try {
+      for (const entry of readdirSync(SESSIONS_ROOT, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        if (!entry.name.startsWith(`${slug}-`) || !entry.name.endsWith("-report.md")) continue;
+        found.push(`${entry.parentPath}/${entry.name}`);
+      }
+    } catch {}
+    if (found.length > 0) return found;
+    await sleep(1000);
+  }
+  return [];
+}
 
 if (backends.length === 0) {
   console.log("⚠️  No mux backend available — skipping subagent lifecycle integration tests");
@@ -107,6 +137,38 @@ for (const backend of backends) {
         assert.equal(header.type, "session", "First entry should be session header");
         assert.ok(header.id, "Session header should have an id");
       }
+    });
+
+    it("output: sends the report to a file outside the caller's tree", async () => {
+      const id = uniqueId();
+      const agentName = `Report-${id}`;
+      const surface = createTrackedSurface(env, `report-${id}`);
+      await sleep(1000);
+
+      const task = [
+        `Call the subagent tool with these EXACT parameters:`,
+        `  name: "${agentName}"`,
+        `  agent: "test-report"`,
+        `  task: "Write two sentences about the number 42, then finish."`,
+        `Do not do anything else. Just call the subagent tool once.`,
+        `After you receive the subagent result, say INTEGRATION_COMPLETE.`,
+      ].join("\n");
+
+      startPi(surface, env.dir, task);
+
+      const reports = await waitForReportFile(agentName);
+      assert.ok(reports.length > 0, `No report file found for ${agentName}`);
+
+      // Wait for the parent to observe completion, so cleanup does not close the
+      // parent while the child surface is still being torn down.
+      await waitForScreen(surface, /INTEGRATION_COMPLETE/, PI_TIMEOUT);
+
+      const report = reports[0];
+      assert.ok(!report.startsWith(env.dir), `Report must not land in the caller's tree: ${report}`);
+      assert.ok(report.includes("/reports/"), `Report should live under reports/: ${report}`);
+
+      const content = readFileSync(report, "utf8");
+      assert.ok(content.trim().length > 0, "Report file should not be empty");
     });
 
     // ── In-progress activity snapshots ──
