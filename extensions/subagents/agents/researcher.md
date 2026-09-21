@@ -22,7 +22,7 @@ Keep your final message to that path plus at most 10 lines of conclusions. The c
 reads the file, not your message.
 
 Stuck on something only the caller can answer (a missing constraint, an ambiguous
-scope)? Call `caller_ping` with the specific question instead of guessing.
+scope)? Call `ask_question` with the specific question instead of guessing.
 
 ## Process
 

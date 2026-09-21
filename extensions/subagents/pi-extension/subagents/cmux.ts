@@ -1679,6 +1679,33 @@ export interface PollResult {
   errorMessage?: string;
 }
 
+/** Non-terminal request written by `ask_question`; the child stays alive. */
+export interface AskRequest {
+  name: string;
+  question: string;
+}
+
+/**
+ * Read a `<sessionFile>.ask` sidecar written by `ask_question`. Returns null
+ * when the file is missing or carries no usable question. The caller deletes
+ * the sidecar once the request has been delivered to the parent.
+ */
+export function readAskSidecar(path: string): AskRequest | null {
+  try {
+    if (!existsSync(path)) return null;
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    if (data?.type !== "ask") return null;
+    const question = typeof data.question === "string" ? data.question.trim() : "";
+    if (!question) return null;
+    return {
+      name: typeof data.name === "string" && data.name ? data.name : "subagent",
+      question,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Interpret an `.exit` sidecar payload (written by subagent_done / caller_ping /
  * the error path in subagent-done.ts). Centralized so both the fast and slow
@@ -1717,6 +1744,11 @@ export async function pollForExit(
     sessionFile?: string;
     sentinelFile?: string;
     onTick?: (elapsed: number) => void;
+    /**
+     * Called when the child asks a question. Unlike `.exit`, this does not end
+     * the poll: the child is parked in its pane waiting for an answer.
+     */
+    onAsk?: (ask: AskRequest) => void;
   },
 ): Promise<PollResult> {
   const start = Date.now();
@@ -1736,6 +1768,19 @@ export async function pollForExit(
           return interpretExitSidecar(data);
         }
       } catch {}
+    }
+
+    // Non-terminal: the child asked a question and stays alive in its pane.
+    // Deliver the request and keep polling for its eventual exit.
+    if (options.sessionFile && options.onAsk) {
+      const askFile = `${options.sessionFile}.ask`;
+      const ask = readAskSidecar(askFile);
+      if (ask) {
+        try {
+          rmSync(askFile, { force: true });
+        } catch {}
+        options.onAsk(ask);
+      }
     }
 
     // Check Claude sentinel file (written by plugin Stop hook)

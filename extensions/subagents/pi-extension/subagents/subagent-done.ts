@@ -44,6 +44,74 @@ export interface SubagentErrorInfo {
 }
 
 /**
+ * A child that asked a question must not auto-exit: its pane has to stay open
+ * so the parent can deliver the answer as the next user message.
+ */
+export function shouldAutoExitAfterTurn(opts: {
+  autoExit: boolean;
+  waitingForParent: boolean;
+  userTookOver: boolean;
+  messages: any[] | undefined;
+}): boolean {
+  if (!opts.autoExit) return false;
+  if (opts.waitingForParent) return false;
+  return shouldAutoExitOnAgentEnd(opts.userTookOver, opts.messages);
+}
+
+/**
+ * Any tool call other than the ask tools means the model kept working instead
+ * of parking, so the waiting state must not block the eventual auto-exit.
+ *
+ * Do NOT add `turn_start` here: a turn is one model request, so the request
+ * that produces the message AFTER the ask_question call starts a new turn and
+ * would clear the waiting state before agent_end ever sees it. The answer
+ * arriving is signalled by the `input` event instead.
+ */
+export function shouldClearWaitingOnToolStart(toolName: string): boolean {
+  return toolName !== "ask_question" && toolName !== "caller_ping";
+}
+
+/**
+ * Build the `<sessionFile>.ask` payload the parent watcher reads.
+ * Throws when there is no question to send.
+ */
+export function buildAskPayload(name: string, question: string): {
+  type: "ask";
+  name: string;
+  question: string;
+  at: string;
+} {
+  const trimmed = (question ?? "").trim();
+  if (!trimmed) throw new Error("ask_question requires a non-empty question.");
+  return {
+    type: "ask",
+    name: name || "subagent",
+    question: trimmed,
+    at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Text returned to the child after it asks. The child must stop here: the
+ * answer arrives later as an ordinary user message in this same session.
+ */
+export function askQuestionToolResult(name: string) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text:
+          `Question sent to the parent as "${name}". Your pane stays open and your session is parked.\n\n` +
+          `Stop here: end your turn now with a one-line note that you are waiting for the answer. ` +
+          `Do not guess an answer and do not start other work. ` +
+          `The reply will arrive as your next user message, and you continue from where you stopped.`,
+      },
+    ],
+    details: { status: "waiting_for_parent", name },
+  };
+}
+
+/**
  * If the last assistant message in the turn ended with `stopReason: "error"`
  * (typically auto-retry exhausted on an overload / rate limit / server error),
  * return its error info so the parent orchestrator can surface a clear
@@ -144,6 +212,8 @@ export default function (pi: ExtensionAPI) {
 
   let userTookOver = false;
   let agentStarted = false;
+  /** True while the child is parked with an unanswered question. */
+  let waitingForParent = false;
 
   // Show widget + status bar on session start
   pi.on("session_start", (_event, ctx) => {
@@ -157,6 +227,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("input", () => {
     recorder.input();
+    // A user message arrived in this session. The only way that can happen
+    // while parked is the parent answering (or a human typing), so the wait is
+    // over. This must not move to `turn_start`: that fires again for the model
+    // request that follows the ask, which would clear the state too early.
+    waitingForParent = false;
     // Ignore the initial task message that starts an autonomous subagent.
     // Only inputs after the first agent run has started count as user takeover.
     if (!shouldMarkUserTookOver(agentStarted)) return;
@@ -174,7 +249,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_end", (event, ctx) => {
     const messages = (event as any).messages as any[] | undefined;
-    const shouldExit = autoExit && shouldAutoExitOnAgentEnd(userTookOver, messages);
+    const shouldExit = shouldAutoExitAfterTurn({
+      autoExit,
+      waitingForParent,
+      userTookOver,
+      messages,
+    });
 
     if (shouldExit) {
       // Always notify the parent via the .exit sidecar before shutdown so
@@ -233,7 +313,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", (event) => {
-    recorder.toolExecutionStart((event as any).toolCallId, (event as any).toolName);
+    const toolName = (event as any).toolName;
+    if (shouldClearWaitingOnToolStart(toolName)) waitingForParent = false;
+    recorder.toolExecutionStart((event as any).toolCallId, toolName);
   });
 
   pi.on("tool_call", (event) => {
@@ -265,38 +347,56 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  const askToolDescription =
+    "Ask the parent agent a question and WAIT for the answer instead of guessing. " +
+    "This session stays open and parked; the reply arrives as your next user message. " +
+    "Use it only for decisions or facts you cannot settle yourself — then end your turn.";
+
+  function askParentAndPark(question: string) {
+    const sessionFile = process.env.PI_SUBAGENT_SESSION;
+    if (!sessionFile) {
+      throw new Error(
+        "ask_question is only available in subagent contexts. " +
+          "PI_SUBAGENT_SESSION environment variable is not set.",
+      );
+    }
+
+    const name = process.env.PI_SUBAGENT_NAME ?? "subagent";
+    const payload = buildAskPayload(name, question);
+    recorder.callerPing();
+    // Non-terminal sidecar: the parent watcher picks it up and keeps polling.
+    // Unlike `.exit`, this must NOT shut the session down.
+    writeFileSync(`${sessionFile}.ask`, JSON.stringify(payload), "utf8");
+    waitingForParent = true;
+    return askQuestionToolResult(name);
+  }
+
+  pi.registerTool({
+    name: "ask_question",
+    label: "Ask Parent",
+    description: askToolDescription,
+    parameters: Type.Object({
+      question: Type.String({
+        description: "The question for the parent agent, with the context it needs to answer.",
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      return askParentAndPark(params.question);
+    },
+  });
+
   pi.registerTool({
     name: "caller_ping",
     label: "Caller Ping",
     description:
-      "Send a help request to the parent agent and exit this session. " +
-      "The parent will be notified with your message and can resume this session with a response. " +
-      "Use when you're stuck, need clarification, or need the parent to take action.",
+      "Alias of ask_question, kept for existing agent prompts. " +
+      "Sends the message to the parent and parks this session until the reply arrives. " +
+      "It no longer exits the session.",
     parameters: Type.Object({
       message: Type.String({ description: "What you need help with" }),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const sessionFile = process.env.PI_SUBAGENT_SESSION;
-      if (!sessionFile) {
-        throw new Error(
-          "caller_ping is only available in subagent contexts. " +
-            "PI_SUBAGENT_SESSION environment variable is not set.",
-        );
-      }
-
-      recorder.callerPing();
-      const exitData = {
-        type: "ping" as const,
-        name: process.env.PI_SUBAGENT_NAME ?? "subagent",
-        message: params.message,
-      };
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify(exitData));
-
-      ctx.shutdown();
-      return {
-        content: [{ type: "text", text: "Ping sent. Session will exit and parent will be notified." }],
-        details: {},
-      };
+    async execute(_toolCallId, params) {
+      return askParentAndPark(params.message);
     },
   });
 

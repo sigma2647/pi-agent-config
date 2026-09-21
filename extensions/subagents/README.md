@@ -65,14 +65,17 @@ Subagent panes are created without stealing keyboard focus (cmux, tmux). Launch 
 
 ### Extensions
 
-**Subagents** — 4 main-session tools + 3 commands, plus 1 subagent-only tool:
+**Subagents** — 5 main-session tools + 3 commands, plus 2 subagent-only tools:
 
 | Tool                 | Description                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------------------- |
 | `subagent`           | Spawn a sub-agent in a dedicated multiplexer pane (async — returns immediately)             |
 | `subagent_interrupt` | Interrupt a running Pi-backed subagent's current turn                                       |
 | `subagents_list`     | List available agent definitions                                                            |
-| `subagent_resume`    | Resume a previous sub-agent session (async)                                                 |
+| `subagent_resume`    | Resume a previous sub-agent session by path (async)                                         |
+| `subagent_message`   | Message a sub-agent by name: answers a waiting child, steers a running one, resumes a finished one |
+
+Subagent-only tools: `ask_question` (ask the parent and park) and `subagent_done` (interactive agents only).
 
 | Command                    | Description                          |
 | -------------------------- | ------------------------------------ |
@@ -196,7 +199,7 @@ subagent_interrupt({ id: "abcd1234" });
 subagent_interrupt({ name: "Scout" });
 ```
 
-This sends Escape to the child pane, cancelling the in-progress model turn. The subagent session stays alive — the pane, session file, and background polling all remain intact. After the interrupt, the widget immediately moves the child back to `waiting`, and stale pre-interrupt snapshots are ignored. If the child starts work later, newer snapshots return it to `active`; completion, failure, and `caller_ping` still flow through normally.
+This sends Escape to the child pane, cancelling the in-progress model turn. The subagent session stays alive — the pane, session file, and background polling all remain intact. After the interrupt, the widget immediately moves the child back to `waiting`, and stale pre-interrupt snapshots are ignored. If the child starts work later, newer snapshots return it to `active`; completion, failure, and `ask_question` still flow through normally.
 
 This is a turn-level interrupt, not a method for forcibly terminating a subagent session.
 
@@ -204,37 +207,65 @@ This is a turn-level interrupt, not a method for forcibly terminating a subagent
 
 ---
 
-## caller_ping — Child-to-Parent Help Request
+## ask_question / subagent_message — Child-to-Parent Conversation
 
-The `caller_ping` tool lets a subagent request help from its parent agent. When called, the child session **exits** and the parent receives a notification with the help message. The parent can then **resume** the child session with a response using `subagent_resume`.
+The `ask_question` tool lets a subagent ask its parent a question **without dying**. The
+child parks: its pane stays open, its session stays alive, and the parent's answer arrives
+as the child's next user message. `caller_ping` is kept as an alias for older agent
+prompts, and now behaves the same way (it used to exit the session).
 
-**`caller_ping` parameters:**
-- `message` (required): What you need help with
+**`ask_question` parameters:**
+- `question` (required): the question, with the context the parent needs to answer
 
-**`subagent_resume` parameters:**
+**`subagent_message` parameters:**
+- `name` (required): the sub-agent's display name
+- `message` (required): the answer or follow-up instruction
+
+**Interaction flow:**
+1. Child calls `ask_question({ question: "v1 or v2 for the migration?" })` and ends its turn
+2. Parent receives a steer notification naming the child and the question
+3. Parent answers with `subagent_message({ name: "Worker", message: "Use v2, v1 is deprecated" })`
+4. The answer is typed into the child's live pane; the child continues from where it stopped
+
+**Example:**
+```typescript
+// Inside a worker subagent
+await ask_question({
+  question: "Found two conflicting migration files — should I use v1 or v2?"
+});
+// End your turn here. The answer arrives as your next user message.
+```
+
+### `subagent_message` does three things
+
+| Target state | What happens |
+| --- | --- |
+| Waiting on `ask_question` | The message is typed into its pane and unblocks it |
+| Still running | Same channel — it redirects the child at its next turn boundary |
+| Already finished | Its session is resumed in a new pane with your message as the follow-up task |
+
+Messages are flattened to one line before being typed, so a multi-line answer does not get
+submitted as several prompts. Delivery is asynchronous: the child's result still comes back
+as a steer message, so do not assume the message has been read yet.
+
+### Resuming with an explicit session path
+
+`subagent_resume` still exists for the case where the name is unknown (a different session,
+or after a restart):
+
 - `sessionPath` (required): Path to the child session `.jsonl` file
 - `name` (optional): Display name for the resumed pane (defaults to `Resume`)
 - `message` (optional): Follow-up prompt to send after resuming
 - `autoExit` (optional): Whether the resumed session should auto-exit after its next response. Defaults to `true` for autonomous follow-up work; set `false` when resuming for an interactive handoff.
 
-**Interaction flow:**
-1. Child calls `caller_ping({ message: "Not sure which schema to use" })`
-2. Child session exits (like `subagent_done`)
-3. Parent receives a steer notification: *"Sub-agent Worker needs help: Not sure which schema to use"*
-4. Parent resumes the child session via `subagent_resume` with the response
-5. Child picks up where it left off with the parent's guidance
+### Edge cases
 
-**Example:**
-```typescript
-// Inside a worker subagent
-await caller_ping({
-  message: "Found two conflicting migration files — should I use v1 or v2?"
-});
-// Session exits here. Parent receives the ping, then resumes this session
-// with guidance like "Use v2, v1 is deprecated"
-```
-
-> **Note:** `caller_ping` is only available inside subagent contexts. Calling it from a standalone pi session returns an error.
+- If the parent never replies, the child pane stays open. Nothing is lost; answer it later.
+- A child that asks and then keeps working clears its waiting state on the next tool call, so
+  it still auto-exits normally when it finishes.
+- Both tools are only available inside subagent contexts. Calling them from a standalone pi
+  session returns an error.
+- Claude-backed sub-agents cannot be messaged yet: typing into their pane is not supported.
 
 ---
 
@@ -435,7 +466,7 @@ By default, every sub-agent can spawn further sub-agents. Control this with fron
 
 ### `spawning: false`
 
-Denies all subagent lifecycle tools (`subagent`, `subagent_interrupt`, `subagents_list`, `subagent_resume`):
+Denies all subagent lifecycle tools (`subagent`, `subagent_interrupt`, `subagents_list`, `subagent_resume`, `subagent_message`):
 
 ```yaml
 ---

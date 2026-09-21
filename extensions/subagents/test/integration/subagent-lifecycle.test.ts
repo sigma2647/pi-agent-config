@@ -36,6 +36,7 @@ import {
   PI_TIMEOUT,
   type TestEnv,
 } from "./harness.ts";
+import { sendCommand } from "../../pi-extension/subagents/cmux.ts";
 
 const backends = getAvailableBackends();
 
@@ -306,9 +307,9 @@ for (const backend of backends) {
       }
     });
 
-    // ── caller_ping ──
+    // ── ask_question ──
 
-    it("subagent caller_ping sends notification back to the parent", async () => {
+    it("subagent ask_question parks the child and notifies the parent", async () => {
       const id = uniqueId();
 
       const surface = createTrackedSurface(env, `ping-${id}`);
@@ -324,17 +325,56 @@ for (const backend of backends) {
 
       startPi(surface, env.dir, task);
 
-      // The test-ping agent calls caller_ping, which steers a "needs help" message
-      // back to the outer pi. Look for it on screen.
-      const screen = await waitForScreen(
-        surface,
-        /needs help|PING|caller_ping|ping/i,
-        PI_TIMEOUT,
-      );
+      // The test-ping agent calls ask_question, which steers a "waiting for
+      // your answer" message back to the outer pi. Look for it on screen.
+      const screen = await waitForScreen(surface, /is waiting for your answer/i, PI_TIMEOUT);
 
       assert.ok(
-        /needs help|PING/i.test(screen),
-        `Screen should show ping notification. Got:\n${screen.slice(-800)}`,
+        /PING_TEST_/i.test(screen),
+        `Notification should carry the child's question. Got:\n${screen.slice(-800)}`,
+      );
+      assert.ok(
+        /subagent_message/.test(screen),
+        `Notification should name the reply tool. Got:\n${screen.slice(-800)}`,
+      );
+    });
+
+    it("subagent_message answers a parked child and the child continues", async () => {
+      const id = uniqueId();
+      const marker = `/tmp/pi-integ-ask-${id}.txt`;
+      trackTempFile(env, marker);
+
+      const surface = createTrackedSurface(env, `ask-${id}`);
+      await sleep(1000);
+
+      const task = [
+        `Call the subagent tool with these EXACT parameters:`,
+        `  name: "Ask-${id}"`,
+        `  agent: "test-ask"`,
+        `  task: "Marker file: ${marker}"`,
+        `Just call the subagent tool once, then stop and wait.`,
+      ].join("\n");
+
+      startPi(surface, env.dir, task);
+
+      // The child parks instead of exiting; the parent is told it is waiting.
+      // The pattern must be specific: the task echo on screen already contains "PING".
+      await waitForScreen(surface, /is waiting for your answer/i, PI_TIMEOUT);
+
+      // Answer the parked child through the name-addressed channel, the same
+      // way the parent agent answers it in a real run. The token is quoted so
+      // an assertion on it proves the reply text crossed the boundary.
+      sendCommand(
+        surface,
+        `Call the subagent_message tool with name "Ask-${id}" and the exact message text ` +
+          `"REPLY_${id}_OK". Pass that text unchanged. Do nothing else.`,
+      );
+
+      const content = await waitForFile(marker, PI_TIMEOUT, /ANSWERED/);
+      assert.match(
+        content,
+        new RegExp(`ANSWERED.*REPLY_${id}_OK`),
+        `The child should echo the parent's answer verbatim. Marker file held: ${content}`,
       );
     });
 

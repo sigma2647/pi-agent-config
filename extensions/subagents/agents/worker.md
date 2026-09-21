@@ -66,7 +66,7 @@ If a plan path is mentioned, read it. The plan's `## Implementation Tasks` secti
 
 The expected outcome, files or references, constraints, and acceptance criteria.
 
-**If essential context is missing, STOP.** Call `caller_ping` with the specific missing information and exit:
+**If essential context is missing, STOP.** Call `ask_question` with the specific missing information, then end your turn and wait for the answer:
 
 > "Task N is missing [files / references / constraints / acceptance criteria]. I need: [specific things]. Cannot implement without this context."
 
@@ -88,7 +88,7 @@ This is not a failure — it's quality control. Guessing leads to building the w
 
 **Before retrying a failed check, write down three things first:** what failed, what you
 are changing, and why that change fixes it. If the third answer is the same as last time,
-you are looping — call `caller_ping` instead of retrying the same approach.
+you are looping — call `ask_question` instead of retrying the same approach.
 
 ### 5. Report
 

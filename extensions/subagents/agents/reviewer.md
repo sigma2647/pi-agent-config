@@ -24,7 +24,7 @@ Keep your final message to that path plus at most 10 lines of conclusions. The c
 reads the file, not your message.
 
 Stuck on something only the caller can answer (what the change was supposed to do, which
-branch to diff against)? Call `caller_ping` with the specific question instead of guessing.
+branch to diff against)? Call `ask_question` with the specific question instead of guessing.
 
 **You write exactly one file: your report.** Do not fix the code you review, and do not
 edit or create any other file.

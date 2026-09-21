@@ -27,7 +27,7 @@ reads the file, not your message.
 
 **You write exactly one file: your report.** Do not fix CSS or edit any source file.
 If you need something only the caller can give you (the URL, a login, a viewport size),
-call `caller_ping` instead of guessing.
+call `ask_question` instead of guessing.
 
 ---
 

@@ -477,7 +477,7 @@ Your **FINAL message** includes:
 - Any open questions the user parked
 
 **If a blocking gap is only the caller's to fill** — a constraint nobody stated, an
-ambiguous scope, a decision the user must make — call `caller_ping` with the specific
+ambiguous scope, a decision the user must make — call `ask_question` with the specific
 question. Do not invent an answer to keep moving.
 
 > Plan and implementation tasks are ready at `[path]`. Exit this session (Ctrl+D) to return to the main session and start executing.

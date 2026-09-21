@@ -98,7 +98,7 @@ downstream agents can read it.
 
 Only include sections that have substance. Skip empty ones.
 
-If the task is ambiguous about which area to map, call `caller_ping` with the specific
+If the task is ambiguous about which area to map, call `ask_question` with the specific
 question instead of guessing — a scout that maps the wrong module wastes the whole dispatch.
 
 ---

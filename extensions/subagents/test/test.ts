@@ -1128,14 +1128,14 @@ describe("subagent discovery", () => {
   it("buildSubagentToolAllowlist preserves requested tools and adds child control tools", () => {
     assert.equal(
       testApi.buildSubagentToolAllowlist("read,bash,web_search"),
-      "read,bash,web_search,caller_ping,subagent_done",
+      "read,bash,web_search,ask_question,caller_ping,subagent_done",
     );
   });
 
   it("buildSubagentToolAllowlist omits subagent_done for auto-exit agents", () => {
     assert.equal(
       testApi.buildSubagentToolAllowlist("read,bash,web_search", true),
-      "read,bash,web_search,caller_ping",
+      "read,bash,web_search,ask_question,caller_ping",
     );
   });
 
@@ -1523,7 +1523,7 @@ describe("subagent-done.ts", () => {
       subagentDoneExtension(api);
       assert.deepEqual(
         registeredTools.map((tool) => tool.name),
-        ["caller_ping"],
+        ["ask_question", "caller_ping"],
       );
     } finally {
       restoreEnvVar("PI_SUBAGENT_AUTO_EXIT", previousAutoExit);
@@ -1539,7 +1539,7 @@ describe("subagent-done.ts", () => {
       subagentDoneExtension(api);
       assert.deepEqual(
         registeredTools.map((tool) => tool.name),
-        ["caller_ping", "subagent_done"],
+        ["ask_question", "caller_ping", "subagent_done"],
       );
     } finally {
       restoreEnvVar("PI_SUBAGENT_AUTO_EXIT", previousAutoExit);
@@ -2378,6 +2378,25 @@ describe("subagent status renderer", () => {
       },
     };
   }
+
+  it("registers a renderer for every custom message type it sends", () => {
+    const { api, registeredMessageRenderers } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+
+    // A custom message with `display: true` but no renderer is easy to miss in
+    // the transcript. That is exactly how the ask_question notification first
+    // shipped: the message arrived but the user never saw it.
+    const sentCustomTypes = [
+      "subagent_result",
+      "subagent_status",
+      "subagent_ping",
+      "subagent_question",
+    ];
+    const registered = registeredMessageRenderers.map((entry) => entry.name);
+    for (const type of sentCustomTypes) {
+      assert.ok(registered.includes(type), `expected a renderer for ${type}`);
+    }
+  });
 
   it("renders only capped lines plus overflow", () => {
     const { api, registeredMessageRenderers } = createMockExtensionApi();

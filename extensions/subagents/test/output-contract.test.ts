@@ -77,13 +77,13 @@ describe("buildOutputInstruction", () => {
 
 describe("every pi-backed agent knows it can ask the caller", () => {
   // The tool is auto-added to each child's allowlist, but an agent that is
-  // never told it exists will guess instead of asking. `claude-code` is
-  // excluded: it runs the Claude CLI, which has no pi tools.
+  // never told it exists will guess instead of asking. Only Pi-backed agents
+  // are listed: a `cli: claude` agent runs the Claude CLI and has no pi tools.
   for (const agent of ["scout", "researcher", "reviewer", "visual-tester", "worker", "planner"]) {
-    it(`${agent} mentions caller_ping`, () => {
+    it(`${agent} mentions ask_question`, () => {
       const defs = loadAgentDefaults(agent);
       assert.ok(defs?.body, `${agent} has no body`);
-      assert.ok(defs.body.includes("caller_ping"), `${agent} never mentions caller_ping`);
+      assert.ok(defs.body.includes("ask_question"), `${agent} never mentions ask_question`);
     });
   }
 });
