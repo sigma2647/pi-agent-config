@@ -327,7 +327,9 @@ for (const backend of backends) {
 
       // The test-ping agent calls ask_question, which steers a "waiting for
       // your answer" message back to the outer pi. Look for it on screen.
-      const screen = await waitForScreen(surface, /is waiting for your answer/i, PI_TIMEOUT);
+      // The child asks, then parks. Wait on a wrap-tolerant pattern: a narrow
+      // pane breaks this sentence across lines.
+      const screen = await waitForScreen(surface, /is\s+waiting\s+for\s+your\s+answer/i, PI_TIMEOUT);
 
       assert.ok(
         /PING_TEST_/i.test(screen),
@@ -358,8 +360,9 @@ for (const backend of backends) {
       startPi(surface, env.dir, task);
 
       // The child parks instead of exiting; the parent is told it is waiting.
-      // The pattern must be specific: the task echo on screen already contains "PING".
-      await waitForScreen(surface, /is waiting for your answer/i, PI_TIMEOUT);
+      // The pattern must be specific (the task echo already contains "PING") and
+      // wrap-tolerant (a narrow pane breaks the sentence across lines).
+      await waitForScreen(surface, /is\s+waiting\s+for\s+your\s+answer/i, PI_TIMEOUT);
 
       // Answer the parked child through the name-addressed channel, the same
       // way the parent agent answers it in a real run. The token is quoted so
