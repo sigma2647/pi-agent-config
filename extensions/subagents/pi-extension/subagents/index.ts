@@ -299,6 +299,7 @@ const SPAWNING_TOOLS = new Set([
   "subagent_interrupt",
   "subagents_list",
   "subagent_resume",
+  "subagent_message",
 ]);
 
 /**

@@ -1792,6 +1792,9 @@ describe("tool registration", () => {
     assert.equal(denied.has("subagent"), true);
     assert.equal(denied.has("subagent_interrupt"), true);
     assert.equal(denied.has("subagent_resume"), true);
+    // Messaging is a spawning tool: it can resume a finished child, which
+    // creates a new pane. Leaving it out lets `spawning: false` be bypassed.
+    assert.equal(denied.has("subagent_message"), true);
   });
 
   it("renders partial subagent tool-call args without throwing", () => {
