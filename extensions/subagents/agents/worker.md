@@ -1,7 +1,7 @@
 ---
 name: worker
 description: Implements well-scoped tasks - writes code, runs tests, and reports verified results
-tools: read, bash, write, edit
+tools: read, grep, find, ls, bash, write, edit
 deny-tools: claude
 thinking: minimal
 spawning: false

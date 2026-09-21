@@ -94,7 +94,7 @@ Subagent-only tools: `ask_question` (ask the parent and park) and `subagent_done
 | **researcher**    | DeepSeek V4 Flash      | Searches the web and synthesizes focused, sourced findings                               |
 | **worker**        | DeepSeek V4 Flash (minimal thinking) | Implements well-scoped tasks — writes code, runs tests, and reports verified results     |
 | **reviewer**      | DeepSeek V4 Pro (medium thinking) | Reviews code for bugs, security issues, correctness                                      |
-| **visual-tester** | DeepSeek V4 Flash      | Visual QA via Chrome CDP — screenshots, responsive testing, interaction testing          |
+| **visual-tester** | DeepSeek V4 Flash      | Visual QA via browser-probe — screenshots, interaction testing, console/network checks      |
 
 Agent discovery follows priority: **project-local** (`.pi/agents/`) > **global** (`~/.pi/agent/agents/`) > **package-bundled**. Override any bundled agent by placing your own version in the higher-priority location.
 
@@ -394,7 +394,7 @@ Call `subagents_list` to see the active pool (including which entries are in coo
 | `description` | string  | Shown in `subagents_list` output                                                                                                                                                                                                                                            |
 | `model`       | string  | Optional model pin (`provider/model`). Validated against the session's available models at spawn time. Omit to inherit the parent session's current model — recommended when you switch providers often.                                                                                                                                    |
 | `thinking`    | string  | Thinking level: `minimal`, `medium`, `high`                                                                                                                                                                                                                                 |
-| `tools`       | string  | Comma-separated **native pi tools only**: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`                                                                                                                                                                             |
+| `tools`       | string  | Comma-separated tool names: pi built-ins (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) plus extension tools such as `web_search`, `web_fetch`, `browser_probe` |
 | `skills`      | string  | Comma-separated skill names to auto-load                                                                                                                                                                                                                                    |
 | `session-mode` | string | Default child-session mode: `standalone`, `lineage-only`, or `fork` |
 | `spawning`    | boolean | Set `false` to deny all subagent-spawning tools                                                                                                                                                                                                                             |
