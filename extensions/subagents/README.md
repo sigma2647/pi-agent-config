@@ -482,6 +482,28 @@ subagent({ name: "Scout", agent: "scout", interactive: true, task: "..." });
 
 By default, every sub-agent can spawn further sub-agents. Control this with frontmatter:
 
+### The depth cap (the backstop)
+
+Frontmatter is per-agent and can be wrong; a chain cannot. Each spawn counts one
+level, the number travels in the environment from parent to child, and a session at
+the limit does not receive the spawning tools at all:
+
+```
+top-level session (depth 0) → planner (depth 1) → scout (depth 2, cannot spawn)`
+```
+
+The limit is **2** (the top-level session plus two levels below it). Change it per chain
+by exporting `PI_SUBAGENT_MAX_DEPTH` in the top-level session: `0` forbids every spawn,
+`1` allows children but no grandchildren.
+
+The cap also applies when a finished child is **resumed**: a resume is a new pi process,
+so the level and the deny list are re-applied to it. Without that, a resumed `scout`
+would come back with the spawn tools it was denied.
+
+Known gap: a sub-agent that starts another pi *through bash* inherits the current level
+but does not add one, so it can spawn a sibling-level child. Only the documented spawn
+tool increments the count.
+
 ### `spawning: false`
 
 Denies all subagent lifecycle tools (`subagent`, `subagent_interrupt`, `subagents_list`, `subagent_resume`, `subagent_message`):

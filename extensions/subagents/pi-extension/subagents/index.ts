@@ -305,28 +305,80 @@ const SPAWNING_TOOLS = new Set([
   "subagent_message",
 ]);
 
+/** Depth of a top-level session, and the depth one spawn adds. */
+const ROOT_DEPTH = 0;
+/**
+ * How deep a spawn chain may go by default. The top-level session is depth 0, so
+ * 2 allows the top-level session and two levels of children, and stops there.
+ * Agent frontmatter can allow spawning; depth still stops a runaway chain.
+ */
+export const DEFAULT_MAX_SUBAGENT_DEPTH = 2;
+
+function parseDepth(raw: string | undefined, fallback: number): number {
+  // An unset OR empty variable means "not specified". Number("") is 0, which
+  // would silently turn an empty PI_SUBAGENT_MAX_DEPTH into "spawn nothing".
+  const text = (raw ?? "").trim();
+  if (text === "") return fallback;
+  const value = Number(text);
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+/**
+ * Depth of the current session in a spawn chain, read from the environment so a
+ * chain keeps its depth across process boundaries (each child is a new pi).
+ */
+export function resolveSubagentDepth(env: NodeJS.ProcessEnv = process.env): number {
+  return parseDepth(env.PI_SUBAGENT_DEPTH, ROOT_DEPTH);
+}
+
+/** Hard cap on spawn depth for this chain. */
+export function resolveMaxSubagentDepth(env: NodeJS.ProcessEnv = process.env): number {
+  return parseDepth(env.PI_SUBAGENT_MAX_DEPTH, DEFAULT_MAX_SUBAGENT_DEPTH);
+}
+
+/**
+ * True when a session at this depth may not spawn anything further. Depth is the
+ * session's own depth, so the test is the same one used when a child's tools are
+ * chosen at launch: a session at the limit never receives the spawn tools.
+ */
+export function shouldDenySpawning(depth: number, maxDepth: number): boolean {
+  return depth >= maxDepth;
+}
+
 /**
  * Resolve the effective set of denied tool names from agent defaults.
  * `spawning: false` expands to all SPAWNING_TOOLS.
  * `deny-tools` adds individual tool names on top.
+ * The depth cap adds SPAWNING_TOOLS regardless of frontmatter: a sub-agent that
+ * is allowed to spawn at depth 1 is still not allowed to spawn at the limit.
  */
-function resolveDenyTools(agentDefs: AgentDefaults | null): Set<string> {
+function resolveDenyTools(
+  agentDefs: AgentDefaults | null,
+  depth = ROOT_DEPTH,
+  maxDepth = DEFAULT_MAX_SUBAGENT_DEPTH,
+): Set<string> {
   const denied = new Set<string>();
-  if (!agentDefs) return denied;
 
-  // spawning: false → deny all spawning tools
-  if (agentDefs.spawning === false) {
-    for (const t of SPAWNING_TOOLS) denied.add(t);
+  if (agentDefs) {
+    // spawning: false → deny all spawning tools
+    if (agentDefs.spawning === false) {
+      for (const t of SPAWNING_TOOLS) denied.add(t);
+    }
+
+    // deny-tools: explicit list
+    if (agentDefs.denyTools) {
+      for (const t of agentDefs.denyTools
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        denied.add(t);
+      }
+    }
   }
 
-  // deny-tools: explicit list
-  if (agentDefs.denyTools) {
-    for (const t of agentDefs.denyTools
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)) {
-      denied.add(t);
-    }
+  // Depth cap, with or without agent defaults.
+  if (shouldDenySpawning(depth, maxDepth)) {
+    for (const t of SPAWNING_TOOLS) denied.add(t);
   }
 
   return denied;
@@ -1682,6 +1734,10 @@ export const __test__ = {
   formatWidgetRightLabel,
   observeRunningSubagent,
   resolveDenyTools,
+  resolveSubagentDepth,
+  resolveMaxSubagentDepth,
+  shouldDenySpawning,
+  DEFAULT_MAX_SUBAGENT_DEPTH,
   resolveInterruptTarget,
   requestSubagentInterrupt,
   handleSubagentInterrupt,
@@ -1821,7 +1877,8 @@ async function launchSubagent(
   const runTimestamp = artifactTimestamp();
   const reportPath = resolveReportPath(agentDefs?.output, artifactDir, params.name, runTimestamp);
   const closingInstruction = reportPath ? buildOutputInstruction(reportPath) : summaryInstruction;
-  const denySet = resolveDenyTools(agentDefs);
+  const childDepth = resolveSubagentDepth() + 1;
+  const denySet = resolveDenyTools(agentDefs, childDepth);
   const identity = agentDefs?.body ?? params.systemPrompt ?? null;
   const systemPromptMode = agentDefs?.systemPromptMode;
   const identityInSystemPrompt = systemPromptMode && identity;
@@ -1983,6 +2040,7 @@ async function launchSubagent(
   if (denySet.size > 0) {
     envParts.push(`PI_DENY_TOOLS=${shellEscape([...denySet].join(","))}`);
   }
+  envParts.push(`PI_SUBAGENT_DEPTH=${childDepth}`);
   envParts.push(`PI_SUBAGENT_NAME=${shellEscape(params.name)}`);
   if (params.agent) {
     envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
@@ -2251,7 +2309,7 @@ function resumeRememberedSubagent(
       : "";
 
   return launchResumeSession(
-    { sessionPath: entry.sessionFile, name: entry.name, message },
+    { sessionPath: entry.sessionFile, name: entry.name, message, agent: entry.agent },
     ctx,
     pi,
   ).then((result: any) => {
@@ -2545,6 +2603,8 @@ async function launchResumeSession(
     name?: string;
     message?: string;
     autoExit?: boolean;
+    /** Agent the session was spawned with, so its deny set is re-applied. */
+    agent?: string;
   },
   ctx: ExtensionContext,
   pi: ExtensionAPI,
@@ -2603,10 +2663,25 @@ async function launchResumeSession(
     parts.push(shellEscape(`@${resumeMsgFile}`));
   }
 
+  // A resumed child is a fresh pi process: it needs the depth and the deny set
+  // back, or it comes back with spawn tools it was never meant to have.
+  const childDepth = resolveSubagentDepth() + 1;
+  const resumeDenySet = resolveDenyTools(
+    params.agent ? loadAgentDefaults(params.agent) : null,
+    childDepth,
+  );
+
   // Build env prefix — propagate PI_CODING_AGENT_DIR for config isolation
   const resumeEnvParts: string[] = [];
   if (process.env.PI_CODING_AGENT_DIR) {
     resumeEnvParts.push(`PI_CODING_AGENT_DIR=${shellEscape(process.env.PI_CODING_AGENT_DIR)}`);
+  }
+  if (resumeDenySet.size > 0) {
+    resumeEnvParts.push(`PI_DENY_TOOLS=${shellEscape([...resumeDenySet].join(","))}`);
+  }
+  resumeEnvParts.push(`PI_SUBAGENT_DEPTH=${childDepth}`);
+  if (params.agent) {
+    resumeEnvParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
   }
   resumeEnvParts.push(`PI_SUBAGENT_NAME=${shellEscape(name)}`);
   resumeEnvParts.push(`PI_SUBAGENT_SESSION=${shellEscape(params.sessionPath)}`);
@@ -2829,6 +2904,25 @@ export default function subagentsExtension(pi: ExtensionAPI) {
               },
             ],
             details: { error: "self-spawn blocked" },
+          };
+        }
+
+        // Depth cap. A session that reached the limit normally has no spawn tool
+        // at all; this is the backstop for the routes that bypass that (a hand-set
+        // PI_SUBAGENT_DEPTH, or a chain whose deny env was lost).
+        const depth = resolveSubagentDepth();
+        const maxDepth = resolveMaxSubagentDepth();
+        if (shouldDenySpawning(depth, maxDepth)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Refusing to spawn: this session is ${depth} level(s) deep in a sub-agent chain and the limit is ${maxDepth}. ` +
+                  `Do the work here. If the chain genuinely needs another level, raise PI_SUBAGENT_MAX_DEPTH for the top-level session.`,
+              },
+            ],
+            details: { error: "subagent depth limit reached", depth, maxDepth },
           };
         }
 
@@ -3290,7 +3384,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         }
         if (finished) {
           return launchResumeSession(
-            { sessionPath: finished.sessionFile, name: params.name, message: params.message },
+            {
+              sessionPath: finished.sessionFile,
+              name: params.name,
+              message: params.message,
+              agent: finished.agent,
+            },
             ctx,
             pi,
           );
