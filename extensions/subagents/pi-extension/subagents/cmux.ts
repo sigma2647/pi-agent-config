@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { askQueuePath, readAskQueue, type AskRequest } from "./ask-queue.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -1679,33 +1680,6 @@ export interface PollResult {
   errorMessage?: string;
 }
 
-/** Non-terminal request written by `ask_question`; the child stays alive. */
-export interface AskRequest {
-  name: string;
-  question: string;
-}
-
-/**
- * Read a `<sessionFile>.ask` sidecar written by `ask_question`. Returns null
- * when the file is missing or carries no usable question. The caller deletes
- * the sidecar once the request has been delivered to the parent.
- */
-export function readAskSidecar(path: string): AskRequest | null {
-  try {
-    if (!existsSync(path)) return null;
-    const data = JSON.parse(readFileSync(path, "utf8"));
-    if (data?.type !== "ask") return null;
-    const question = typeof data.question === "string" ? data.question.trim() : "";
-    if (!question) return null;
-    return {
-      name: typeof data.name === "string" && data.name ? data.name : "subagent",
-      question,
-    };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Interpret an `.exit` sidecar payload (written by subagent_done / caller_ping /
  * the error path in subagent-done.ts). Centralized so both the fast and slow
@@ -1752,6 +1726,7 @@ export async function pollForExit(
   },
 ): Promise<PollResult> {
   const start = Date.now();
+  const deliveredAskIds = new Set<string>();
 
   for (;;) {
     if (signal.aborted) {
@@ -1771,14 +1746,12 @@ export async function pollForExit(
     }
 
     // Non-terminal: the child asked a question and stays alive in its pane.
-    // Deliver the request and keep polling for its eventual exit.
+    // Deliver each new request and keep polling for its eventual exit. The
+    // queue is not cleared here — sending the answer back is what settles it.
     if (options.sessionFile && options.onAsk) {
-      const askFile = `${options.sessionFile}.ask`;
-      const ask = readAskSidecar(askFile);
-      if (ask) {
-        try {
-          rmSync(askFile, { force: true });
-        } catch {}
+      for (const ask of readAskQueue(askQueuePath(options.sessionFile))) {
+        if (deliveredAskIds.has(ask.id)) continue;
+        deliveredAskIds.add(ask.id);
         options.onAsk(ask);
       }
     }

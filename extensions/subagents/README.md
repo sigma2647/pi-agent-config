@@ -240,9 +240,10 @@ await ask_question({
 
 | Target state | What happens |
 | --- | --- |
-| Waiting on `ask_question` | The message is typed into its pane and unblocks it |
+| Waiting on `ask_question` | The message is typed into its pane and unblocks it; its question queue is cleared |
 | Still running | Same channel — it redirects the child at its next turn boundary |
 | Already finished | Its session is resumed in a new pane with your message as the follow-up task |
+| Unknown to this process (parent restarted) | The durable registry resolves the name, then resumes |
 
 Messages are flattened to one line before being typed, so a multi-line answer does not get
 submitted as several prompts. Delivery is asynchronous: the child's result still comes back
@@ -258,14 +259,31 @@ or after a restart):
 - `message` (optional): Follow-up prompt to send after resuming
 - `autoExit` (optional): Whether the resumed session should auto-exit after its next response. Defaults to `true` for autonomous follow-up work; set `false` when resuming for an interactive handoff.
 
+### What is durable about a question
+
+- The question is written to `<session>.asks.json` next to the child's session file and is
+  **only cleared when the answer is sent**. It is not deleted on read, so a parent restart
+  does not lose it and two questions asked in the same turn both reach the parent.
+- Each question carries a short id which the notification shows. That is what lets the
+  parent find the question again after its context is compacted.
+- A name survives a parent restart: `<artifact-dir>/subagent-registry.json` records every
+  child's name, session file, pane and state. When the in-memory tables miss, `subagent_message`
+  falls back to that file and resumes the conversation by name.
+- A **parked** child keeps its pane when the parent shuts down. It is waiting for an answer,
+  not cancelled work, so the pane is deliberately left open. If a resume happens after a
+  restart, the tool says which pane from the earlier session may still be open.
+
 ### Edge cases
 
 - If the parent never replies, the child pane stays open. Nothing is lost; answer it later.
 - A child that asks and then keeps working clears its waiting state on the next tool call, so
   it still auto-exits normally when it finishes.
-- Both tools are only available inside subagent contexts. Calling them from a standalone pi
-  session returns an error.
-- Claude-backed sub-agents cannot be messaged yet: typing into their pane is not supported.
+- Two children with the same name are refused rather than guessed at — the tool lists their
+  ids instead of messaging one of them.
+- Both tools are only available inside subagent contexts, and neither is reachable through
+  `spawning: false` (messaging can resume a child, which creates a pane).
+- Claude-backed sub-agents cannot be messaged: typing into their pane is not supported, and
+  their transcript is not a pi session.
 
 ---
 

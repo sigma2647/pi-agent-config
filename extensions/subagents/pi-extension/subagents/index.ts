@@ -25,14 +25,17 @@ import {
   getMuxBackend,
   sendEscape,
   sendCommand,
-  readAskSidecar,
-  type AskRequest,
   shellEscape,
   renameCurrentTab,
   renameWorkspace,
   readScreen,
 } from "./cmux.ts";
 
+import {
+  askQueuePath,
+  clearAskQueue,
+  type AskRequest,
+} from "./ask-queue.ts";
 import {
   findLastAssistantMessage,
   getNewEntries,
@@ -778,6 +781,13 @@ interface RunningSubagent {
   modelAttempt?: number;
   /** Models that already failed with provider errors in this spawn chain. */
   fallbackFrom?: string[];
+  /** Artifact directory of the parent session; where the registry lives. */
+  artifactDir?: string;
+  /**
+   * True while the child is parked on an unanswered `ask_question`. A parked
+   * child is not cancelled by a parent shutdown, so its pane is left alone.
+   */
+  awaitingAnswer?: boolean;
   statusState: SubagentStatusState;
   /**
    * When true, status transitions (stalled/recovered) do not wake the parent
@@ -1701,6 +1711,9 @@ export const __test__ = {
   finishedSubagents,
   rememberFinishedSubagent,
   findRunningSubagentsByName,
+  subagentRegistryPath,
+  readSubagentRegistry,
+  writeSubagentRegistryEntry,
   flattenForPane,
   formatAskSteerContent,
   findRunningSubagentByName,
@@ -1886,6 +1899,7 @@ async function launchSubagent(
         source: "claude",
         startTimeMs: startTime,
       }),
+      artifactDir,
     };
 
     runningSubagents.set(id, running);
@@ -2041,6 +2055,7 @@ async function launchSubagent(
       source: "pi",
       startTimeMs: startTime,
     }),
+    artifactDir,
   };
 
   runningSubagents.set(id, running);
@@ -2080,11 +2095,13 @@ function copyClaudeSession(sentinelFile: string): string | null {
  */
 function rememberFinishedSubagent(running: RunningSubagent): void {
   if (!running.sessionFile) return;
+  running.awaitingAnswer = false;
   finishedSubagents.set(running.name, {
     sessionFile: running.sessionFile,
     agent: running.agent,
     cli: running.cli,
   });
+  recordSubagentState(running, "finished");
 }
 
 /**
@@ -2125,20 +2142,139 @@ export function flattenForPane(text: string): string {
 export function formatAskSteerContent(ask: AskRequest, sessionFile?: string): string {
   const sessionRef = sessionFile ? `\n\nSession: ${sessionFile}` : "";
   return (
-    `Sub-agent "${ask.name}" is waiting for your answer:\n\n${ask.question}${sessionRef}\n\n` +
+    `Sub-agent "${ask.name}" is waiting for your answer (request ${ask.id}):\n\n${ask.question}${sessionRef}\n\n` +
     `Reply with subagent_message({ name: ${JSON.stringify(ask.name)}, message: "<your answer>" }) — ` +
     `its pane is still open and it continues from where it stopped.`
   );
 }
 
+/**
+ * Durable name → session map, written into the session artifact directory.
+ *
+ * The in-memory maps die with the process; a parked child does not. After a
+ * restart this file is what still knows that a question is outstanding, which
+ * session it belongs to, and which pane the child is sitting in.
+ */
+export interface SubagentRegistryEntry {
+  name: string;
+  sessionFile: string;
+  surface?: string;
+  agent?: string;
+  cli?: string;
+  status: "running" | "parked" | "finished";
+  updatedAt: string;
+}
+
+/** Path of the registry for one session's artifact directory. */
+export function subagentRegistryPath(artifactDir: string): string {
+  return join(artifactDir, "subagent-registry.json");
+}
+
+/** Read the registry. A missing or unreadable file reads as empty. */
+export function readSubagentRegistry(path: string): Record<string, SubagentRegistryEntry> {
+  try {
+    if (!existsSync(path)) return {};
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    const entries = data?.entries;
+    return entries && typeof entries === "object" ? (entries as Record<string, SubagentRegistryEntry>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Upsert one child's state, leaving every other entry untouched. */
+export function writeSubagentRegistryEntry(path: string, entry: SubagentRegistryEntry): void {
+  try {
+    const entries = readSubagentRegistry(path);
+    entries[entry.name] = entry;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ version: 1, entries }, null, 2)}\n`, "utf8");
+  } catch {
+    // Best effort: the registry only improves recovery, it never gates a run.
+  }
+}
+
+/** Record a child's current state when we know where its artifacts live. */
+function recordSubagentState(running: RunningSubagent, status: SubagentRegistryEntry["status"]): void {
+  if (!running.artifactDir || !running.sessionFile) return;
+  writeSubagentRegistryEntry(subagentRegistryPath(running.artifactDir), {
+    name: running.name,
+    sessionFile: running.sessionFile,
+    surface: running.surface,
+    agent: running.agent,
+    cli: running.cli,
+    status,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** Every child the durable registry knows for this session's artifacts. */
+function readSessionRegistry(ctx: ExtensionContext): Record<string, SubagentRegistryEntry> {
+  const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId());
+  return readSubagentRegistry(subagentRegistryPath(artifactDir));
+}
+
+/**
+ * Look a child up in the durable registry for this session's artifacts.
+ * The in-memory maps die with the process; this is what survives a restart.
+ */
+function findRegistryEntry(
+  ctx: ExtensionContext,
+  name: string,
+): SubagentRegistryEntry | undefined {
+  const entries = readSessionRegistry(ctx);
+  if (entries[name]) return entries[name];
+  const lower = name.toLowerCase();
+  return Object.values(entries).find((entry) => entry.name.toLowerCase() === lower);
+}
+
+/** Names known to the durable registry, for a helpful "unknown name" message. */
+function registryNames(ctx: ExtensionContext): string[] {
+  return Object.keys(readSessionRegistry(ctx));
+}
+
+/**
+ * Continue a child we only know from disk. A parked child may still be sitting
+ * in its pane; this resumes the conversation instead of typing into a pane it
+ * cannot verify, and hands the surface id back so the old pane can be cleaned
+ * up. The two copies share one session file, so nothing is lost either way.
+ */
+function resumeRememberedSubagent(
+  entry: SubagentRegistryEntry,
+  message: string,
+  ctx: ExtensionContext,
+  pi: ExtensionAPI,
+) {
+  const stalePaneNote =
+    entry.status === "parked" && entry.surface
+      ? `\n\nNote: this child was parked, so a pane from an earlier session may still be open at ${entry.surface}. It belongs to the same session; close it when convenient.`
+      : "";
+
+  return launchResumeSession(
+    { sessionPath: entry.sessionFile, name: entry.name, message },
+    ctx,
+    pi,
+  ).then((result: any) => {
+    if (!stalePaneNote || !result?.content?.[0]) return result;
+    return {
+      ...result,
+      content: [{ ...result.content[0], text: `${result.content[0].text}${stalePaneNote}` }],
+    };
+  });
+}
+
 /** Deliver a child's question to the parent session as a steer message. */
 function steerSubagentAsk(pi: ExtensionAPI, running: RunningSubagent, ask: AskRequest): void {
+  // Parked, not working: a parent shutdown must leave this pane alone.
+  running.awaitingAnswer = true;
+  recordSubagentState(running, "parked");
   pi.sendMessage(
     {
       customType: "subagent_question",
       content: formatAskSteerContent(ask, running.sessionFile),
       display: true,
       details: {
+        id: ask.id,
         name: ask.name,
         question: ask.question,
         agent: running.agent,
@@ -2238,9 +2374,15 @@ async function watchSubagent(
       ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
     };
   } catch (err: any) {
-    try {
-      closeSurface(surface);
-    } catch {}
+    // A parked child is not cancelled by a parent shutdown or a parent-side
+    // abort: it is waiting for an answer that its durable request still
+    // promises. Closing its pane here would kill a session the parent can
+    // still reopen and answer.
+    if (!running.awaitingAnswer) {
+      try {
+        closeSurface(surface);
+      } catch {}
+    }
     runningSubagents.delete(running.id);
 
     if (signal.aborted) {
@@ -2512,6 +2654,7 @@ async function launchResumeSession(
       source: "pi",
       startTimeMs: startTime,
     }),
+    artifactDir,
   };
   runningSubagents.set(id, running);
   startWidgetRefresh();
@@ -3109,6 +3252,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           }
 
           sendCommand(running.surface, text);
+          // Answered: settle the durable queue and let the pane be closed
+          // normally again if the run is cancelled from here on.
+          running.awaitingAnswer = false;
+          if (running.sessionFile) clearAskQueue(askQueuePath(running.sessionFile));
+          recordSubagentState(running, "running");
           observeRunningSubagent(running);
           updateWidget();
 
@@ -3140,10 +3288,27 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             details: { error: "claude session not resumable", name: params.name },
           };
         }
-        if (!finished) {
+        if (finished) {
+          return launchResumeSession(
+            { sessionPath: finished.sessionFile, name: params.name, message: params.message },
+            ctx,
+            pi,
+          );
+        }
+
+        // Not known to this process. The name tables are in memory, so a parent
+        // restart loses them — but the durable registry still knows the child,
+        // its session, and whether it was parked when the parent went away.
+        const remembered = findRegistryEntry(ctx, params.name);
+        if (remembered) {
+          return resumeRememberedSubagent(remembered, params.message, ctx, pi);
+        }
+
+        {
           const knownNames = [
             ...Array.from(runningSubagents.values()).map((entry) => entry.name),
             ...Array.from(finishedSubagents.keys()),
+            ...registryNames(ctx),
           ];
           return {
             content: [
@@ -3152,19 +3317,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                 text:
                   `No sub-agent named "${params.name}" in this session. ` +
                   (knownNames.length > 0
-                    ? `Known names: ${knownNames.join(", ")}.`
+                    ? `Known names: ${[...new Set(knownNames)].join(", ")}.`
                     : "Nothing has been spawned yet."),
               },
             ],
             details: { error: "unknown subagent", name: params.name },
           };
         }
-
-        return launchResumeSession(
-          { sessionPath: finished.sessionFile, name: params.name, message: params.message },
-          ctx,
-          pi,
-        );
       },
     });
 

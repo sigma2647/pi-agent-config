@@ -7,8 +7,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
+import { appendAskRequest, askQueuePath, type AskRequest } from "./ask-queue.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -72,19 +74,14 @@ export function shouldClearWaitingOnToolStart(toolName: string): boolean {
 }
 
 /**
- * Build the `<sessionFile>.ask` payload the parent watcher reads.
- * Throws when there is no question to send.
+ * Build one queued question. The id is what the parent echoes back in the
+ * notification, so a request stays addressable after the context is compacted.
  */
-export function buildAskPayload(name: string, question: string): {
-  type: "ask";
-  name: string;
-  question: string;
-  at: string;
-} {
+export function buildAskPayload(name: string, question: string, id: string): AskRequest {
   const trimmed = (question ?? "").trim();
   if (!trimmed) throw new Error("ask_question requires a non-empty question.");
   return {
-    type: "ask",
+    id,
     name: name || "subagent",
     question: trimmed,
     at: new Date().toISOString(),
@@ -95,19 +92,19 @@ export function buildAskPayload(name: string, question: string): {
  * Text returned to the child after it asks. The child must stop here: the
  * answer arrives later as an ordinary user message in this same session.
  */
-export function askQuestionToolResult(name: string) {
+export function askQuestionToolResult(name: string, id: string) {
   return {
     content: [
       {
         type: "text" as const,
         text:
-          `Question sent to the parent as "${name}". Your pane stays open and your session is parked.\n\n` +
+          `Question sent to the parent as "${name}" (id ${id}). Your pane stays open and your session is parked.\n\n` +
           `Stop here: end your turn now with a one-line note that you are waiting for the answer. ` +
           `Do not guess an answer and do not start other work. ` +
           `The reply will arrive as your next user message, and you continue from where you stopped.`,
       },
     ],
-    details: { status: "waiting_for_parent", name },
+    details: { status: "waiting_for_parent", name, id },
   };
 }
 
@@ -362,13 +359,14 @@ export default function (pi: ExtensionAPI) {
     }
 
     const name = process.env.PI_SUBAGENT_NAME ?? "subagent";
-    const payload = buildAskPayload(name, question);
+    const request = buildAskPayload(name, question, randomUUID().slice(0, 8));
     recorder.callerPing();
-    // Non-terminal sidecar: the parent watcher picks it up and keeps polling.
-    // Unlike `.exit`, this must NOT shut the session down.
-    writeFileSync(`${sessionFile}.ask`, JSON.stringify(payload), "utf8");
+    // Durable and non-terminal: the parent watcher reads this queue without
+    // deleting it and keeps polling. Unlike `.exit`, this must NOT shut the
+    // session down. Appending keeps a second question from the same turn.
+    appendAskRequest(askQueuePath(sessionFile), request);
     waitingForParent = true;
-    return askQuestionToolResult(name);
+    return askQuestionToolResult(name, request.id);
   }
 
   pi.registerTool({

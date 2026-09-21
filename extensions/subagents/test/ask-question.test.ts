@@ -1,15 +1,15 @@
 /**
  * Tests for the child-to-parent question channel.
  *
- * The point of `ask_question` is that the child PARKS instead of exiting: its
- * pane stays open, the parent answers with `subagent_message`, and the child
- * continues from where it stopped. These tests pin the pieces that decide that
- * behaviour — the sidecar payload, the auto-exit guard, the pane-safe message
- * flattening, and the reply text handed to the parent.
+ * The point of `ask_question` is that the child PARKS instead of exiting, and
+ * that the question is durable: it lives in an on-disk queue until the answer
+ * has been sent, so a parent restart does not lose it. These tests pin the
+ * sidecar payload, the queue, the auto-exit guard, the pane-safe message
+ * flattening, the reply text, and the durable name registry.
  */
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { __test__ } from "../pi-extension/subagents/index.ts";
@@ -20,7 +20,14 @@ import subagentDoneExtension, {
   shouldClearWaitingOnToolStart,
   shouldAutoExitOnAgentEnd,
 } from "../pi-extension/subagents/subagent-done.ts";
-import { readAskSidecar } from "../pi-extension/subagents/cmux.ts";
+import {
+  ASK_QUEUE_SUFFIX,
+  appendAskRequest,
+  askQueuePath,
+  clearAskQueue,
+  parseAskQueue,
+  readAskQueue,
+} from "../pi-extension/subagents/ask-queue.ts";
 
 const {
   flattenForPane,
@@ -28,33 +35,126 @@ const {
   findRunningSubagentByName,
   findRunningSubagentsByName,
   rememberFinishedSubagent,
+  subagentRegistryPath,
+  readSubagentRegistry,
+  writeSubagentRegistryEntry,
   runningSubagents,
   finishedSubagents,
 } = __test__;
 
+let dir: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "ask-queue-"));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
 describe("buildAskPayload", () => {
-  it("trims the question and tags the sidecar as an ask", () => {
-    const payload = buildAskPayload("worker", "  v1 or v2?  ");
-    assert.equal(payload.type, "ask");
-    assert.equal(payload.name, "worker");
-    assert.equal(payload.question, "v1 or v2?");
+  it("trims the question and carries the id the parent echoes back", () => {
+    const request = buildAskPayload("worker", "  v1 or v2?  ", "req-1");
+    assert.equal(request.id, "req-1");
+    assert.equal(request.name, "worker");
+    assert.equal(request.question, "v1 or v2?");
   });
 
   it("falls back to a generic name", () => {
-    assert.equal(buildAskPayload("", "help").name, "subagent");
+    assert.equal(buildAskPayload("", "help", "req-2").name, "subagent");
   });
 
   it("refuses an empty question", () => {
-    assert.throws(() => buildAskPayload("worker", "   "), /non-empty question/);
+    assert.throws(() => buildAskPayload("worker", "   ", "req-3"), /non-empty question/);
   });
 });
 
 describe("askQuestionToolResult", () => {
   it("tells the child to park rather than guess", () => {
-    const text = askQuestionToolResult("worker").content[0].text;
+    const text = askQuestionToolResult("worker", "req-9").content[0].text;
     assert.match(text, /stays open/);
+    assert.match(text, /req-9/);
     assert.match(text, /end your turn/);
     assert.match(text, /Do not guess/);
+  });
+});
+
+describe("ask queue", () => {
+  it("sits next to the child session file", () => {
+    assert.equal(askQueuePath("/tmp/child.jsonl"), `/tmp/child.jsonl${ASK_QUEUE_SUFFIX}`);
+  });
+
+  it("reads as empty when the file is missing", () => {
+    assert.deepEqual(readAskQueue(join(dir, "nothing.asks.json")), []);
+  });
+
+  it("keeps every question asked in the same turn", () => {
+    const path = askQueuePath(join(dir, "child.jsonl"));
+    appendAskRequest(path, buildAskPayload("worker", "first?", "a"));
+    appendAskRequest(path, buildAskPayload("worker", "second?", "b"));
+
+    assert.deepEqual(
+      readAskQueue(path).map((request) => request.question),
+      ["first?", "second?"],
+    );
+  });
+
+  it("is only cleared once the answer has been sent", () => {
+    const path = askQueuePath(join(dir, "child.jsonl"));
+    appendAskRequest(path, buildAskPayload("worker", "still waiting?", "a"));
+    assert.equal(readAskQueue(path).length, 1);
+
+    clearAskQueue(path);
+    assert.equal(existsSync(path), false);
+    assert.deepEqual(readAskQueue(path), []);
+  });
+
+  it("survives a corrupt queue file", () => {
+    const path = askQueuePath(join(dir, "child.jsonl"));
+    writeFileSync(path, "{not json", "utf8");
+    assert.deepEqual(readAskQueue(path), []);
+  });
+
+  it("drops entries without a question and tolerates a missing id", () => {
+    assert.deepEqual(parseAskQueue({}), []);
+    assert.deepEqual(parseAskQueue([{ question: "  " }]), []);
+    const [kept] = parseAskQueue([{ name: "w", question: "keep me", at: "2026-01-01T00:00:00Z" }]);
+    assert.equal(kept.question, "keep me");
+    assert.equal(kept.id, "2026-01-01T00:00:00Z");
+  });
+});
+
+describe("subagent registry", () => {
+  it("upserts one child without touching the others", () => {
+    const path = subagentRegistryPath(dir);
+    writeSubagentRegistryEntry(path, {
+      name: "Worker",
+      sessionFile: "/tmp/w.jsonl",
+      status: "running",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    writeSubagentRegistryEntry(path, {
+      name: "Scout",
+      sessionFile: "/tmp/s.jsonl",
+      status: "finished",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    writeSubagentRegistryEntry(path, {
+      name: "Worker",
+      sessionFile: "/tmp/w.jsonl",
+      status: "parked",
+      surface: "w1:p2",
+      updatedAt: "2026-01-01T00:01:00Z",
+    });
+
+    const entries = readSubagentRegistry(path);
+    assert.equal(entries.Worker.status, "parked");
+    assert.equal(entries.Worker.surface, "w1:p2");
+    assert.equal(entries.Scout.status, "finished");
+  });
+
+  it("reads as empty when missing or corrupt", () => {
+    assert.deepEqual(readSubagentRegistry(join(dir, "none.json")), {});
+    writeFileSync(subagentRegistryPath(dir), "{not json", "utf8");
+    assert.deepEqual(readSubagentRegistry(subagentRegistryPath(dir)), {});
   });
 });
 
@@ -130,114 +230,21 @@ describe("flattenForPane", () => {
 });
 
 describe("formatAskSteerContent", () => {
-  it("names the reply tool and the child", () => {
-    const text = formatAskSteerContent({ name: "worker", question: "v1 or v2?" }, "/tmp/s.jsonl");
+  it("names the request, the child and the reply tool", () => {
+    const text = formatAskSteerContent(
+      { id: "req-7", name: "worker", question: "v1 or v2?", at: "" },
+      "/tmp/s.jsonl",
+    );
     assert.match(text, /"worker" is waiting/);
+    assert.match(text, /request req-7/);
     assert.match(text, /v1 or v2\?/);
     assert.match(text, /subagent_message\(\{ name: "worker"/);
     assert.match(text, /\/tmp\/s\.jsonl/);
   });
 
   it("omits the session block when there is no session file", () => {
-    assert.doesNotMatch(formatAskSteerContent({ name: "w", question: "?" }), /Session:/);
-  });
-});
-
-describe("readAskSidecar", () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "ask-sidecar-"));
-  });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("reads a valid ask", () => {
-    const path = join(dir, "s.jsonl.ask");
-    writeFileSync(path, JSON.stringify({ type: "ask", name: "worker", question: "v1 or v2?" }));
-    assert.deepEqual(readAskSidecar(path), { name: "worker", question: "v1 or v2?" });
-  });
-
-  it("returns null when the file is missing", () => {
-    assert.equal(readAskSidecar(join(dir, "nothing.ask")), null);
-  });
-
-  it("ignores a payload that is not an ask", () => {
-    const path = join(dir, "s.jsonl.ask");
-    writeFileSync(path, JSON.stringify({ type: "done" }));
-    assert.equal(readAskSidecar(path), null);
-  });
-
-  it("ignores an unreadable or empty payload", () => {
-    const path = join(dir, "s.jsonl.ask");
-    writeFileSync(path, "{not json");
-    assert.equal(readAskSidecar(path), null);
-    writeFileSync(path, JSON.stringify({ type: "ask", question: "   " }));
-    assert.equal(readAskSidecar(path), null);
-  });
-});
-
-describe("a parked child", () => {
-  const ENV_KEYS = ["PI_SUBAGENT_AUTO_EXIT", "PI_SUBAGENT_SESSION", "PI_SUBAGENT_NAME"] as const;
-
-  it("survives the model request that follows the ask, then exits once the reply lands", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ask-park-"));
-    const sessionFile = join(dir, "child.jsonl");
-    const saved = ENV_KEYS.map((key) => [key, process.env[key]] as const);
-
-    process.env.PI_SUBAGENT_AUTO_EXIT = "1";
-    process.env.PI_SUBAGENT_SESSION = sessionFile;
-    process.env.PI_SUBAGENT_NAME = "worker";
-
-    const tools: any[] = [];
-    const handlers = new Map<string, Function>();
-    let shutdown = false;
-
-    try {
-      subagentDoneExtension({
-        on(event: string, handler: Function) {
-          handlers.set(event, handler);
-        },
-        getAllTools() {
-          return [];
-        },
-        registerShortcut() {},
-        registerTool(tool: any) {
-          tools.push(tool);
-        },
-      } as any);
-
-      const ask = tools.find((tool) => tool.name === "ask_question");
-      assert.ok(ask, "ask_question should be registered");
-      await ask.execute("call-1", { question: "v1 or v2?" });
-
-      assert.ok(existsSync(`${sessionFile}.ask`), "ask sidecar should be written");
-      assert.equal(existsSync(`${sessionFile}.exit`), false, "asking must not exit the child");
-
-      // A turn is ONE model request, so the request that produces the message
-      // AFTER the ask_question call starts a new turn. Clearing the parked
-      // state there is the bug that made children exit before being answered.
-      handlers.get("turn_start")!({ turnIndex: 1 });
-
-      const ctx = { shutdown: () => { shutdown = true; } };
-      const normalTurn = { messages: [{ role: "assistant", stopReason: "stop" }] };
-      handlers.get("agent_end")!(normalTurn, ctx);
-
-      assert.equal(shutdown, false, "a parked child must not auto-exit");
-      assert.equal(existsSync(`${sessionFile}.exit`), false, "no done sidecar while parked");
-
-      // The parent's reply arrives as a user message in this same session.
-      handlers.get("input")!({});
-      handlers.get("agent_end")!(normalTurn, ctx);
-
-      assert.equal(shutdown, true, "once answered, the child exits normally");
-    } finally {
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const text = formatAskSteerContent({ id: "r", name: "w", question: "?", at: "" });
+    assert.doesNotMatch(text, /Session:/);
   });
 });
 
@@ -282,5 +289,74 @@ describe("rememberFinishedSubagent", () => {
   it("ignores a run that never wrote a session file", () => {
     rememberFinishedSubagent({ name: "NoSession", sessionFile: "" } as any);
     assert.equal(finishedSubagents.has("NoSession"), false);
+  });
+});
+
+describe("a parked child", () => {
+  const ENV_KEYS = ["PI_SUBAGENT_AUTO_EXIT", "PI_SUBAGENT_SESSION", "PI_SUBAGENT_NAME"] as const;
+
+  it("survives the model request that follows the ask, then exits once the reply lands", async () => {
+    const sessionFile = join(dir, "child.jsonl");
+    const saved = ENV_KEYS.map((key) => [key, process.env[key]] as const);
+
+    process.env.PI_SUBAGENT_AUTO_EXIT = "1";
+    process.env.PI_SUBAGENT_SESSION = sessionFile;
+    process.env.PI_SUBAGENT_NAME = "worker";
+
+    const tools: any[] = [];
+    const handlers = new Map<string, Function>();
+    let shutdown = false;
+
+    try {
+      subagentDoneExtension({
+        on(event: string, handler: Function) {
+          handlers.set(event, handler);
+        },
+        getAllTools() {
+          return [];
+        },
+        registerShortcut() {},
+        registerTool(tool: any) {
+          tools.push(tool);
+        },
+      } as any);
+
+      const ask = tools.find((tool) => tool.name === "ask_question");
+      assert.ok(ask, "ask_question should be registered");
+      await ask.execute("call-1", { question: "v1 or v2?" });
+
+      const queue = readAskQueue(askQueuePath(sessionFile));
+      assert.equal(queue.length, 1, "the question should be queued on disk");
+      assert.equal(queue[0].question, "v1 or v2?");
+      assert.equal(existsSync(`${sessionFile}.exit`), false, "asking must not exit the child");
+
+      // A turn is ONE model request, so the request that produces the message
+      // AFTER the ask_question call starts a new turn. Clearing the parked
+      // state there is the bug that made children exit before being answered.
+      handlers.get("turn_start")!({ turnIndex: 1 });
+
+      const ctx = { shutdown: () => { shutdown = true; } };
+      const normalTurn = { messages: [{ role: "assistant", stopReason: "stop" }] };
+      handlers.get("agent_end")!(normalTurn, ctx);
+
+      assert.equal(shutdown, false, "a parked child must not auto-exit");
+      assert.equal(existsSync(`${sessionFile}.exit`), false, "no done sidecar while parked");
+
+      // The parent's reply arrives as a user message in this same session.
+      handlers.get("input")!({});
+      handlers.get("agent_end")!(normalTurn, ctx);
+
+      assert.equal(shutdown, true, "once answered, the child exits normally");
+      assert.equal(
+        readFileSync(askQueuePath(sessionFile), "utf8").includes("v1 or v2?"),
+        true,
+        "the queue is the parent's to clear, not the child's",
+      );
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
