@@ -274,7 +274,7 @@ Follow this contract exactly:
 
 | Situation | Required action |
 |-----------|-----------------|
-| Normal spawn | Apply per-task model selection (below). When in doubt, omit `model` and let the child inherit the parent session's model. |
+| Normal spawn | Omit `model`. The configured pool decides the model (see Model selection below). |
 | User names a specific model | Call `subagents_list`, copy the exact `provider/model` reference into `model`. Never write a model id from memory; the extension rejects unavailable refs at spawn time. |
 | Unknown agent name | The tool rejects it and lists the available agents. Pick from that list; do not retry the same name. |
 | Stop a running child turn | Use `subagent_interrupt` with the exact `id` or `name`. |
@@ -286,23 +286,25 @@ There is no `subagent_close` tool. Do not substitute raw `tmux`, `herdr`,
 `cmux`, `zellij`, or `wezterm` lifecycle commands; the extension owns pane
 creation and closure.
 
-### Per-task model selection
+### Model selection — the pool owns it
 
-Before the first dispatch in a session, call `subagents_list` once and note the
-available models — they change with the user's provider setup, so never assume
-them. On each dispatch, set `model` by task class:
+Before the first dispatch in a session, call `subagents_list` once. It prints
+the configured model pool in priority order — that list is the user's
+preference, and the extension already walks it on provider errors and cools
+down failures. Do not second-guess it by task class.
 
-- **Light tier — scout, researcher, visual checks, any read-only sweep**: pick a
-  cheap/fast model from the list. Telltale ids: `flash`, `mini`, `air`, `lite`,
-  `haiku`.
-- **Heavy tier — planner, reviewer, complex or high-risk worker tasks**: pick a
-  strong model. Telltale ids: `pro`, `max`, `opus`, or the plain flagship name
-  with no tier marker.
+- **Default: omit `model`.** The pool head decides. A worker does not get a
+  "stronger" model because its task looks heavier.
+- **User names a model**: copy the exact `provider/model` reference from
+  `subagents_list` into `model`. Never write a model id from memory.
+- **User asks for a tier, e.g. "use the cheap one"**: pick the matching ref
+  from `subagents_list` and say which one you picked.
 
-Hard rules: use only refs that appear in the `subagents_list` output; if the
-list has a single model, no clear tiers, or you cannot tell, omit `model` and
-inherit the parent session's model — a valid default beats a guessed override.
-Re-list when the user changes providers mid-session.
+Hard rules: pass `model` only when the user asked for a specific model or tier.
+Never set it from your own judgement of task difficulty. Use only refs that
+appear in the `subagents_list` output. If no pool is configured, omit `model`
+and inherit the parent session's model. Re-list when the user changes providers
+mid-session.
 
 ## Implementation Discipline
 
