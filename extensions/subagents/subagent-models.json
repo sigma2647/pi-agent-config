@@ -1,9 +1,9 @@
 {
   "models": [
-    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-flash",
+    "deepseek/deepseek-v4-pro",
     "zai-coding-cn/glm-5.3",
-    "zai-coding-cn/glm-5.2",
-    "deepseek/deepseek-v4-pro"
+    "zai-coding-cn/glm-5.2"
   ],
   "cooldownMs": 600000
 }

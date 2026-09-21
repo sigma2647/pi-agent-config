@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Deep web researcher — combines general search, site adapters, Zhihu, and rendered-browser investigation
-tools: web_search, web_fetch, bash, write
+tools: web_search, web_fetch, bash, write, browser_probe
 skills: opencli-usage, zhihu, browser-probe
 deny-tools: claude
 output: brief.md
