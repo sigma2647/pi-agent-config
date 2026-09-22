@@ -1,12 +1,16 @@
 /**
  * Web Search — 多后端回退链版
  *
- * 默认链：brave → browser-probe → opencli
+ * 默认链：brave → browser-probe
  * 配置：
- *   - PI_WEB_SEARCH_CHAIN="brave,browser-probe,opencli"
- *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _BROWSER_PROBE / _OPENCLI  (毫秒)
- *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 15000)
+ *   - PI_WEB_SEARCH_CHAIN="brave,browser-probe"
+ *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _BROWSER_PROBE  (毫秒)
+ *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 25000)
  *   - PI_WEB_SEARCH_BROWSER_PROBE_BACKEND=auto|harness|playwright
+ *   - PI_WEB_SEARCH_ENGINE=google|bing  (默认 google，失败回退 bing)
+ *   - PI_WEB_SEARCH_CDP_URL  (显式指定浏览器调试端口；不设时自动用
+ *     browser-probe 当前 session 的浏览器，再退回 127.0.0.1:9222)
+ *   - PI_WEB_SEARCH_CDP_DISCOVER=0  (关掉上面的自动发现)
  *   - BRAVE_SEARCH_API_KEY  (Brave 后端启用条件)
  *
  * 运行时调用参数 chain 数组可临时覆盖。
@@ -95,8 +99,8 @@ function formatFailure(query: string, attempts: BackendAttempt[]): string {
   }
   lines.push("");
   lines.push(
-    "Hint: set BRAVE_SEARCH_API_KEY, ensure opencli Browser Bridge is connected, " +
-      "or install browser-harness.",
+    "Hint: set BRAVE_SEARCH_API_KEY, or make the browser-probe fallback available " +
+      "(browser-harness on PATH, or Chrome running with --remote-debugging-port=9222).",
   );
   return lines.join("\n");
 }
@@ -106,14 +110,18 @@ export default function (pi: ExtensionAPI) {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web via Brave → browser-probe → opencli fallback chain. " +
+      "Search the web via Brave → browser-probe fallback chain (browser-probe = a real Chrome SERP; call it directly as " +
+      "`browser_probe [\"search\", \"<query>\"]`). " +
       "Returns ranked URLs with titles and short snippets — NOT full page content. " +
       "To read a result's full content, call web_fetch on its URL. " +
-      "For site-scoped search (Bilibili/Zhihu/YouTube/WeChat Official Accounts/etc.), prefer the site's opencli adapter (`opencli list`).",
+      "For site-scoped search (Zhihu/Bilibili/YouTube/WeChat Official Accounts/etc.), prefer the site's dedicated CLI when one is installed; Zhihu has `zhihu search|global|hot`.",
     promptSnippet: "Search the web with backend fallback",
     promptGuidelines: [
       "Use web_search to DISCOVER URLs. Snippets are previews, not answers — follow up with web_fetch on top results to read full pages.",
-      "For structured site search (Bilibili, Zhihu, YouTube, arXiv, etc.), prefer opencli via bash: `opencli <site> <action> -f json` (use `opencli list | grep <site>` to discover).",
+      "For structured site search (Bilibili, YouTube, arXiv, etc.), prefer a dedicated site CLI via bash when one is installed (e.g. `zhihu search <query>`); otherwise fall back to web_search or the browser_probe `search` surface.",
+      "For Zhihu content, use the `zhihu` CLI via bash: `zhihu search <query>` (on-site) / `zhihu global <query>` (whole web) / `zhihu hot` (trending). Output is a JSON envelope — parse with `jq`, not `head`/`grep`. It needs no login. Use it instead of a general web_search for Zhihu questions and answers.",
+      "When Brave returns nothing, you want a rendered SERP, or you need a specific engine (`--engine baidu`), search directly with the browser_probe tool: `[\"search\", \"<query>\"]` — same browser the chain falls back to.",
+      "Match the channel to the query TYPE, not to the result count: Brave is the default and is solid for English technical queries, while Chinese-language, hot-topic, and community questions are its weak spot — use the `zhihu` CLI or re-call this tool with `chain: [\"browser-probe\"]` there. The chain escalates only when a backend returns nothing, so a full page of SEO mirrors or content-farm pages means the channel is wrong, not that the query needs rephrasing.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
@@ -123,13 +131,13 @@ export default function (pi: ExtensionAPI) {
       chain: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "Optional override of the fallback chain (e.g. ['opencli','brave']). Unknown names are silently dropped.",
+            "Chain override for this call — also the quality escape hatch. `['browser-probe']` forces the second engine's SERP (independent index and different locale coverage); `['brave']` forces Brave only; `['exa','brave']` opts in a backend that is out of the default chain. Unknown names are silently dropped.",
         }),
       ),
       proxy: Type.Optional(
         Type.String({
           description:
-            "Optional per-call proxy URL (e.g. http://127.0.0.1:7890). Honored by the brave backend; opencli inherits env; browser-probe (CDP) ignores per-call override.",
+            "Optional per-call proxy URL (e.g. http://127.0.0.1:7890). Honored by the brave backend; browser-probe (CDP) ignores per-call override.",
         }),
       ),
     }),

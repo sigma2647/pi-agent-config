@@ -63,11 +63,22 @@ export function extractTokens(query: string): string[] {
   return [...new Set(tokens)];
 }
 
+// One matching token is not evidence of relevance: for "pi coding agent
+// subagents extension" the token "pi" alone admits π pages and an industrial
+// motion-control vendor. Require two distinct tokens — never more than the
+// query actually has, so a single-token query ("jev") still matches on one.
+const MIN_TOKEN_HITS = 2;
+
 export function isRelevant(query: string, r: SearchResult): boolean {
   const tokens = extractTokens(query);
   if (tokens.length === 0) return true; // pure-symbol query → don't filter
   const hay = `${r.title} ${r.snippet}`.toLowerCase();
-  return tokens.some((t) => hay.includes(t));
+  const required = Math.min(MIN_TOKEN_HITS, tokens.length);
+  let hits = 0;
+  for (const t of tokens) {
+    if (hay.includes(t) && ++hits >= required) return true;
+  }
+  return false;
 }
 
 export function filterRelevant(

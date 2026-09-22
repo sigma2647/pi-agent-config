@@ -4,7 +4,6 @@ import type { Backend, BackendAttempt, SearchResult } from "./backends/types.ts"
 import { filterRelevant } from "./validate.ts";
 import { braveBackend } from "./backends/brave.ts";
 import { exaBackend } from "./backends/exa.ts";
-import { opencliBackend } from "./backends/opencli.ts";
 import { browserProbeBackend } from "./backends/browser.ts";
 
 const REGISTRY = new Map<string, Backend>();
@@ -20,7 +19,6 @@ export function registerBackend(b: Backend): void {
 export function registerDefaultBackends(): void {
   registerBackend(braveBackend);
   registerBackend(exaBackend);
-  registerBackend(opencliBackend);
   registerBackend(browserProbeBackend);
 }
 
@@ -37,12 +35,13 @@ export type ChainConfig = {
 const DEFAULT_TIMEOUTS: Record<string, number> = {
   brave: 4000,
   exa: 5000,
-  opencli: 20000,
   "browser-probe": 15000,
 };
 
 const DEFAULT_TOTAL_TIMEOUT_MS = 25000;
-const DEFAULT_CHAIN = ["brave", "browser-probe", "opencli"];
+// Opt-in backends (exa) are registered but stay out of the default chain;
+// enable them with PI_WEB_SEARCH_CHAIN or --chain.
+const DEFAULT_CHAIN = ["brave", "browser-probe"];
 
 // Single source of truth for the one user-facing chain knob. Both entry points
 // (index.ts tool param, dev.ts --fast flag) describe it from here and pass the
@@ -51,7 +50,7 @@ const DEFAULT_CHAIN = ["brave", "browser-probe", "opencli"];
 // meaning here and the signature below; the entry points just pass through.
 export const FAST_OPTION_DESC =
   "Query only the first backend in the chain (fail-fast, lowest latency); " +
-  "skip the slower browser-probe/opencli fallbacks even if the first returns nothing.";
+  "skip the slower browser-probe fallback even if the first returns nothing.";
 
 export function loadConfig(override?: {
   chain?: string[];
@@ -166,7 +165,7 @@ export async function runChain(
         });
 
         // Stop at the first backend returning a non-empty result. The chain is
-        // brave (primary) → opencli/browser (fallbacks), not peer engines —
+        // brave (primary) → browser-probe (fallback), not peer engines —
         // fanning out + merging would add latency + noise for little breadth.
         return { kind: "ok", backend: name, results: filtered, attempts };
       } catch (err) {

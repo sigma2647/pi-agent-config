@@ -6,17 +6,17 @@ tryLoadEnv();
 registerDefaultBackends();
 
 const USAGE = `usage:
-  pi-ws <query>                  full chain (brave → browser-probe → opencli)
+  pi-ws <query>                  full chain (brave → browser-probe)
                                  default output is JSON (matches what the pi
                                  web_search agent tool returns, easy to pipe
                                  into jq).
   pi-ws --human <query>          human-readable output (numbered list)
   pi-ws --format json|human ...  same idea, explicit form
   pi-ws --fast <query>           query only the first backend (brave); skip
-                                 the slower browser-probe/opencli fallbacks
+                                 the slower browser-probe fallback
   pi-ws --chain a,b <query>      override fallback chain for this call
   pi-ws --proxy <url> <query>    per-call proxy override (e.g. --proxy http://127.0.0.1:7890)
-                                 honored by brave; opencli inherits env;
+                                 honored by brave;
                                  browser-probe (CDP) ignores per-call override.
   pi-ws --list                   list registered backends + effective chain
   pi-ws --doctor                 environment & backend self-check
@@ -24,9 +24,15 @@ const USAGE = `usage:
   pi-ws --json <query>           alias for --format json (kept for muscle memory)
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
-  PI_WEB_SEARCH_CHAIN              "brave,browser-probe,opencli"
-  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 15000
+  PI_WEB_SEARCH_CHAIN              "brave,browser-probe"
+  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 25000
   PI_WEB_SEARCH_TIMEOUT_<BACKEND>  per-backend, ms
+  PI_WEB_SEARCH_ENGINE             google|bing — pin the browser-probe engine
+                                   (default: google, then bing)
+  PI_WEB_SEARCH_CDP_URL            explicit browser CDP endpoint; when unset the
+                                   backend uses browser-probe's live session
+                                   browser, then 127.0.0.1:9222
+  PI_WEB_SEARCH_CDP_DISCOVER=0     skip that discovery, go straight to 9222
   BRAVE_SEARCH_API_KEY             required for the brave backend
 `;
 
@@ -102,7 +108,7 @@ for (let i = 0; i < args.length; i++) {
 				`available backends: ${available.join(", ") || "(none registered)"}\n` +
 				`current chain:     ${cfg.chain.join(" → ") || "(empty)"}\n` +
 				`example:\n` +
-				`  pi-ws --chain brave,opencli "your query"\n` +
+				`  pi-ws --chain brave,exa "your query"\n` +
 				`  pi-ws --chain ${available[0] ?? "brave"} "your query"`,
 			);
 		}

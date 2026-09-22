@@ -11,8 +11,9 @@ import { wechatExtractor } from "./wechat.ts";
 //
 // Note on zhihu.com: no server-side extractor here. Zhihu's API requires a
 // dynamic x-zse-96 signature and the HTML page returns a CAPTCHA wall to
-// anonymous fetches (Jina Reader also fails). Use `opencli zhihu ...` from
-// the user's logged-in browser session instead.
+// anonymous fetches (Jina Reader also fails). Use the `zhihu` CLI in bash
+// instead: `zhihu search <query>` / `zhihu global <query>` — JSON envelope,
+// no login, no browser session needed.
 const EXTRACTORS: Extractor[] = [
 	bilibiliExtractor,
 	githubExtractor,

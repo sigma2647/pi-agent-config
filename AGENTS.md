@@ -20,7 +20,7 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 
 - Known URL → `web_fetch`.
 - General discovery → `web_search`, then `web_fetch` relevant results.
-- Site-scoped structured search → `opencli <site> ... -f json`; do not add site adapters to the general `web_search` fallback chain.
+- Site-scoped structured search → the site's dedicated CLI in bash (e.g. `zhihu search <query>`, `zhihu global <query>`); do not add site adapters to the general `web_search` fallback chain.
 - Rendered/authenticated/interactive browser work → prefer **Browser Probe** when a matching skill/tool path exists; native `agent_browser` is the fallback/compatibility path.
 - Native browser details and migration policy: `docs/browser-automation.md`.
 - OpenCLI Browser Bridge updates: `docs/opencli-extension-update.md`.
@@ -31,7 +31,7 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 agent/agents/                 personal Git-managed agent definitions
 extensions/install.sh          unified CLI installer
 extensions/web-fetch/          single URL fetch/extract (pi-wf)
-extensions/web-search/         brave → browser-probe → opencli search (pi-ws)
+extensions/web-search/         brave → browser-probe search (pi-ws)
 extensions/subagents/          async mux-backed subagent package
 extensions/dictation/          offline + cloud speech-to-text dictation (pi-dictation)
 extensions/_common/            shared utilities
@@ -40,7 +40,7 @@ extensions/_common/            shared utilities
 ## Fallback chains
 
 - **web-fetch:** domain extractor → Defuddle → Readability → Jina → Browser Probe → Playwright. Defuddle default; opt out with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`.
-- **web-search:** `brave → browser-probe → opencli`, stop at first non-empty result. Exa is opt-in only.
+- **web-search:** `brave → browser-probe`, stop at first non-empty result. Exa is opt-in only.
 - **subagents:** async fire-and-return; results arrive automatically. Bundled specialists use `system-prompt: replace` + `context-files: project`.
 
 ## Collaboration patterns

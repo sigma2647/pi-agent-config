@@ -39,7 +39,7 @@ extensions/
 ├── web-search/          ← multi-backend search                          (pi-ws)
 │   ├── chain.ts         ← backend registry + chain dispatcher
 │   ├── validate.ts      ← relevance filtering (keyword-match results against query)
-│   └── backends/        ← one file per source (brave/exa/browser-probe/opencli)
+│   └── backends/        ← one file per source (brave/exa/browser-probe)
 ├── subagents/           ← vendored pi-interactive-subagents package
 │   ├── package.json     ← pi entrypoint: ./pi-extension/subagents/index.ts
 │   ├── pi-extension/    ← async mux-backed subagent extension implementation
@@ -79,9 +79,9 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 
 **web-fetch** (per URL): `domain extractor → defuddle → http+Readability → Jina Reader → Playwright (gated)`. Defuddle is the default because its metadata, sections, and Pandoc footnotes are more LLM-friendly for ~260ms extra. Opt out with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`; `--defuddle` remains a no-op alias.
 
-**web-search** (per query): `brave → browser-probe → opencli`, stopping at the first non-empty result by design; do not add fan-out/RRF. Exa is registered but opt-in via `PI_WEB_SEARCH_CHAIN` or `--chain exa`. `fast` queries only the first backend. CLI output defaults to JSON (`--human` / `PI_WS_FORMAT=human` opt out), and unknown flags are errors. `--proxy` overrides Brave only; opencli inherits env and the already-running browser keeps its launch proxy. The backend registry and types are re-exported for third parties.
+**web-search** (per query): `brave → browser-probe`, stopping at the first non-empty result by design; do not add fan-out/RRF. Exa stays registered but is out of the default chain — opt in via `PI_WEB_SEARCH_CHAIN` or `--chain exa`. `fast` queries only the first backend. The browser-probe backend renders a real SERP in the managed browser — Google first, then Bing as fallback (`PI_WEB_SEARCH_ENGINE=google|bing` pins one engine and drops the fallback). That is the same engine order the `browser_probe ["search", "<query>"]` surface uses, so the chain and the direct tool agree; before this the backend hardcoded Bing and the two silently diverged. It drives the browser browser-probe's daemon already owns rather than a guessed port: `~/.browser-probe/active` names the session and `sessions/<name>/daemon.json` carries `chrome.port` — the same file browser-probe's own `doctor` reads, since the port is ephemeral and changes on every browser restart. `PI_WEB_SEARCH_CDP_URL` overrides the target, `PI_WEB_SEARCH_CDP_DISCOVER=0` disables discovery, and `127.0.0.1:9222` is the last resort (that Chrome is a different profile, and Google serves it a `/sorry/` anti-bot page — the reason discovery exists). CLI output defaults to JSON (`--human` / `PI_WS_FORMAT=human` opt out), and unknown flags are errors. `--proxy` overrides Brave only; the already-running browser keeps its launch proxy. The backend registry and types are re-exported for third parties.
 
-**`web_search` is general-web only.** Site-scoped search belongs in an opencli adapter plus a concrete `promptGuidelines` pointer, never in the stop-at-first-non-empty backend chain. URL extraction remains a separate `web-fetch` concern.
+**`web_search` is general-web only.** Site-scoped search belongs in a dedicated site CLI plus a concrete `promptGuidelines` pointer, never in the stop-at-first-non-empty backend chain. Zhihu gets its own line because it has a working dedicated CLI: the guidance points at `zhihu search <query>` (on-site), `zhihu global <query>` (whole-web), `zhihu hot` (trending) — JSON envelope, no login, ~600ms each. All three verified live 2026-09-22. URL extraction remains a separate `web-fetch` concern.
 
 **dictation** speaks both local and cloud: `providers: { local | openai | groq | siliconflow | glm | deepgram }` with `provider: "auto"` picking the first *ready* entry in that documented order (`local → openai → groq → siliconflow → glm → deepgram`). "Ready" means the model files exist on disk **and** the `sherpa-onnx` package resolves (local), or the key env var resolves (cloud) — no network probing. `local/sherpa.ts` owns that check (`sherpaRuntimeAvailable()`, a path resolve that never loads the WASM) and the `SHERPA_INSTALL_HINT` fix line, so `doctor`, `/dictation status` and the loader error all name the same command instead of claiming "ready" and failing only after the user has spoken. Every backend — the local runtime and every cloud service — is a typed entry in `providers/index.ts:BACKENDS` keyed by config `type`: adding a service is a new file plus one line, and an unregistered config type is a compile error. When nothing is ready, both entry points append `core.ts:notReadyHint()` to the toast, so the hotkey error names the real cause (a missing runtime, a missing key) instead of repeating the two generic suggestions. The offline path is sherpa-onnx WASM (models under `~/.pi/agent/dictation-models/`, downloaded with curl + system tar), so it needs no key and works with no network. UI surface: right-aligned state label inside the prompt border, live level meter above the editor, red/yellow border tint while recording/transcribing.
 
@@ -118,7 +118,6 @@ Adding a new CLI = add `pi.cli` to its `package.json`, rerun installer. No per-e
 - **OpenCLI Browser Bridge 更新必须遵循 `docs/opencli-extension-update.md`。** 下载并验证 zip 后才能删除旧目录；保持扩展路径不变，完成后提醒用户在 `chrome://extensions` 手动刷新。
 - **`new Date(ts * 1000).toISOString()` throws on invalid `ts`.** Wrap in `safeDate()` (already in bilibili/zhihu extractors) when handling external API timestamps.
 - **Don't read browser profile Cookies SQLite directly.** Use Playwright with `launchPersistentContext` so cookies load natively + transparently.
-- **OpenCLI auto-wake** — when the opencli backend detects the daemon running but the Browser Bridge extension disconnected, it auto-launches headed Chromium with `--load-extension=<unpacked-dir>` on port 19826 and polls `opencli daemon status` for up to 10s. Code is inline in `backends/opencli.ts` (wake functions below the exported backend).
 - **Web-fetch truncation + retrieval (`storage.ts`)** — pages >30KB are truncated in the tool response and the full content stored in-memory (30-min TTL, pruned on `session_start`). The truncated output includes a `retrieveId` the agent can pass as `web_fetch({ retrieve: "<id>" })` to get the full document without re-fetching. No disk I/O, no session persistence — lives only as long as the pi process.
 - **Exa backend (`backends/exa.ts`)** — registered but NOT in the default chain. Requires `EXA_SEARCH_API_KEY`. Semantically-driven search (neural embeddings + keyword fusion), ~2.4x slower than Brave, higher noise rate on technical queries. Use via `--chain exa` or `PI_WEB_SEARCH_CHAIN=brave,exa,...`.
 
@@ -176,8 +175,8 @@ Push back with project evidence when any check fails; do not manufacture a “ba
 
 For Bilibili, Zhihu, WeChat, YouTube, arXiv, and similar site search:
 
-1. Check `opencli list | grep -i <site>`.
-2. If an adapter exists, add a concrete `promptGuidelines` pointer such as `opencli <site> search "<kw>" -f json`; do not register it in the stop-at-first-non-empty general chain.
+1. Check whether the site ships a dedicated CLI (`command -v <site>`), e.g. `zhihu`.
+2. If one exists, add a concrete `promptGuidelines` pointer such as `zhihu search "<kw>"`; do not register it in the stop-at-first-non-empty general chain.
 3. Treat URL extraction separately: a matching `web-fetch` domain extractor is appropriate because it activates only for its own domain.
 
 Only a genuine general web engine that could answer every query belongs in `web-search/backends/`.

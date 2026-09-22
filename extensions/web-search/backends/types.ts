@@ -22,8 +22,7 @@ export interface SearchOptions {
    * Explicit proxy URL for this call. Overrides env-based detection.
    * Pass empty string ("") to disable proxy for this call only.
    *
-   * Honored by `brave`. `opencli` inherits env (subprocess; per-call override
-   * not piped through). `browser` (CDP) connects to an existing Chromium
+   * Honored by `brave`. `browser` (CDP) connects to an existing Chromium
    * instance whose proxy is fixed at launch time — per-call override is a
    * no-op there; see browser.ts.
    */

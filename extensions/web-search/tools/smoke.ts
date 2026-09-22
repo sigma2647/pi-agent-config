@@ -3,11 +3,13 @@
 //
 // Runs 2 cases against the installed pi-ws CLI, asserting exit code +
 // valid JSON + results.length >= minResults. ~3-8s on happy path.
-// case 2 (force-opencli) SKIPs if opencli is not on PATH.
+// case 2 (force-browser-probe) SKIPs when no CDP endpoint is reachable and
+// browser-harness is not on PATH — the fallback path is covered without
+// requiring Chrome to be up.
 
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
-import { which } from "../../_common/tools/cli-helpers.ts";
+import { which, probeTcp } from "../../_common/tools/cli-helpers.ts";
 
 const execFileP = promisify(execFile);
 
@@ -16,6 +18,7 @@ interface SmokeCase {
 	args: string[];
 	minResults: number;
 	skipIf?: () => Promise<boolean>;
+	skipReason?: string;
 }
 
 interface CaseResult {
@@ -27,6 +30,19 @@ interface CaseResult {
 	stderrHead?: string;
 }
 
+// Mirrors doctor's availability check for the browser-probe backend: either a
+// reachable CDP endpoint or browser-harness on PATH, otherwise the chain skips it.
+async function browserProbeAvailable(): Promise<boolean> {
+	if (await which("browser-harness")) return true;
+	const cdpUrl = process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
+	try {
+		const u = new URL(cdpUrl);
+		return await probeTcp(u.hostname, Number(u.port) || (u.protocol === "https:" ? 443 : 80));
+	} catch {
+		return false;
+	}
+}
+
 const CASES: SmokeCase[] = [
 	{
 		id: "default-chain",
@@ -34,10 +50,11 @@ const CASES: SmokeCase[] = [
 		minResults: 3,
 	},
 	{
-		id: "force-opencli",
-		args: ["--chain", "opencli", "wikipedia HTTP RFC"],
+		id: "force-browser-probe",
+		args: ["--chain", "browser-probe", "wikipedia HTTP RFC"],
 		minResults: 3,
-		skipIf: async () => (await which("opencli")) === null,
+		skipIf: async () => !(await browserProbeAvailable()),
+		skipReason: "no CDP endpoint and no browser-harness",
 	},
 ];
 
@@ -52,7 +69,7 @@ const NC = useColor ? "\x1b[0m" : "";
 
 async function runCase(c: SmokeCase, deadline: number): Promise<CaseResult> {
 	if (c.skipIf && (await c.skipIf())) {
-		return { id: c.id, status: "SKIP", resultCount: 0, elapsedMs: 0, reason: "opencli not on PATH" };
+		return { id: c.id, status: "SKIP", resultCount: 0, elapsedMs: 0, reason: c.skipReason ?? "skipped" };
 	}
 	const t0 = Date.now();
 	const remaining = deadline - t0;
