@@ -28,7 +28,7 @@ scope)? Call `ask_question` with the specific question instead of guessing.
 
 1. Break the question into 2-4 searchable facets.
 2. Search broadly with `web_search`, then identify which gaps need deeper or site-specific evidence.
-3. Use `opencli` adapters for supported sites and `zhihu search` for Chinese expert/community depth.
+3. Use `opencli` adapters for supported sites, `zhihu search` for on-site Chinese Q&A, and `browser_probe` `search` when you need a rendered SERP or an engine the default chain does not cover.
 4. Fetch the 2-3 most relevant source URLs with `web_fetch`; use `browser-probe` only for rendered, authenticated, interactive, or otherwise inaccessible content.
 5. Cross-check important claims across source types and synthesize a brief that directly answers the question.
 
@@ -45,10 +45,24 @@ Choose the narrowest capable channel:
 
 - **General web:** `web_search` for discovery, then `web_fetch` to read the actual sources.
 - **Site-specific structured data:** start with `opencli list | grep -i <site>`, inspect command help, then run the matching adapter with `-f json`. Do not use OpenCLI as a generic search engine.
-- **Chinese technical/community evidence:** use `zhihu search "<query>"`; weigh votes, author credentials, and recency as quality signals, not proof.
+- **Chinese technical/community evidence:** `zhihu search "<query>"` for on-site Q&A, or `zhihu global "<query>"` when the evidence lives outside Zhihu — it searches the whole web, with `-f 'host=="36kr.com"'` to pin a host. The `zhihu` skill covers `hot` and `ask` as well. Weigh votes, author credentials, and recency as quality signals, not proof.
+- **Rendered SERP, or a named engine:** search directly in the browser with the `browser_probe` tool, args `["search", "<query>"]` (`--engine baidu` for a specific engine). Reach for it when Brave comes back weak or off-topic, when you want a different index or a named engine, or when the SERP itself is the evidence.
 - **Rendered or logged-in pages:** use `browser-probe` after static fetch or adapters are insufficient. Prefer built-in extractors, inspect compact state before interaction, and do not submit forms or perform side effects.
 
 Do not invoke every channel mechanically. Escalate only when it adds evidence or fills a named gap. If OpenCLI or browser-probe is unavailable, record the failed channel and continue with the remaining sources.
+
+## Escalating past a weak Brave round
+
+Brave is the default, not the verdict. Judge its round before you start reading sources. It is weak when the top hits are SEO filler, scraper mirrors, or off-topic; when the question is niche, version-specific, or Chinese-language; or when the fact is better evidenced first-hand than by a summary blog.
+
+Rephrase for Brave at most twice. Then escalate:
+
+1. `browser_probe ["search", "<query>"]` — rendered SERP, different index, richer snippets. Add `--engine baidu` (or another engine) when the topic is Chinese or Brave's index is clearly missing it.
+2. `zhihu search "<query>"` / `zhihu global "<query>"` — first-hand Chinese technical and community evidence; weigh votes, author credentials, and recency.
+
+Pick by question type, not by habit: Chinese technical or practitioner question goes to `zhihu`; English/global questions, or ones where the SERP composition itself matters, go to `browser_probe` search.
+
+In the brief's Sources section, record the channels you actually used and one line on why each beat the default.
 
 ## Source Evaluation
 
