@@ -25,6 +25,9 @@ const DEFAULT_CDP = "http://127.0.0.1:9222";
 const PROBE_TIMEOUT_MS = 1000;
 
 let cdpBase: { url: string; source: string } | null = null;
+// The override value the memo was built from, so an in-process change to
+// PI_WEB_SEARCH_CDP_URL is noticed instead of silently ignored.
+let cdpBaseEnv = "";
 
 function browserProbeHome(): string {
   return process.env.PI_WEB_SEARCH_BROWSER_PROBE_HOME || join(homedir(), ".browser-probe");
@@ -84,9 +87,10 @@ async function probeCdp(base: string, signal?: AbortSignal): Promise<boolean> {
 export async function resolveCdpBase(
   force = false,
 ): Promise<{ url: string; source: string }> {
-  if (cdpBase && !force) return cdpBase;
+  const explicit = process.env.PI_WEB_SEARCH_CDP_URL?.trim() ?? "";
+  if (cdpBase && !force && cdpBaseEnv === explicit) return cdpBase;
+  cdpBaseEnv = explicit;
 
-  const explicit = process.env.PI_WEB_SEARCH_CDP_URL?.trim();
   if (explicit) {
     cdpBase = { url: explicit, source: "PI_WEB_SEARCH_CDP_URL" };
     return cdpBase;
@@ -204,11 +208,18 @@ const GOOGLE_SCRAPE = `(() => {
     const url = resolve(anchor, container);
     if (!url || url.indexOf('http') !== 0 || seen.has(url)) continue;
     seen.add(url);
+    // Plenty of Google rows carry no snippet node at all; fall back to the
+    // whole card minus its title, otherwise the relevance filter only ever
+    // sees a three-word title and drops good results.
     const sn = container && container.querySelector('.VwiC3b, .IsZvec, [data-sncf]');
+    const title = norm(h3.textContent).slice(0, 200);
+    const card = container ? norm(container.innerText) : '';
+    let snippet = sn ? norm(sn.textContent) : '';
+    if (!snippet && card) snippet = card.indexOf(title) === 0 ? card.slice(title.length).trim() : card;
     items.push({
-      title: norm(h3.textContent).slice(0, 200),
+      title: title,
       url: url,
-      snippet: norm(sn && sn.textContent).slice(0, 320)
+      snippet: snippet.slice(0, 320)
     });
     if (items.length >= 12) break;
   }
@@ -236,11 +247,11 @@ const BING_SCRAPE = `(() => {
     const a = el.querySelector('h2 a');
     const s = el.querySelector('.b_caption p, p.b_lineclamp4, .b_lineclamp3');
     if (!a) return null;
-    return {
-      title: (a.textContent || '').trim(),
-      url: decodeBingUrl(a.href),
-      snippet: s ? (s.textContent || '').trim() : ''
-    };
+    const title = (a.textContent || '').trim();
+    const card = (el.innerText || '').trim();
+    let sn = s ? (s.textContent || '').trim() : '';
+    if (!sn && card) sn = card.indexOf(title) === 0 ? card.slice(title.length).trim() : card;
+    return { title: title, url: decodeBingUrl(a.href), snippet: sn };
   }).filter(Boolean);
   return { items: items, blocked: '' };
 })()`;
@@ -274,10 +285,13 @@ export function getEngineOrder(): EngineName[] {
   return DEFAULT_ENGINE_ORDER;
 }
 
-// Per-engine navigation budget. Two engines must still fit inside the
-// backend's own 15s timeout (DEFAULT_TIMEOUTS["browser-probe"]).
-const NAV_TIMEOUT_MS = 6000;
-const WAIT_FOR_RESULTS_MS = 3000;
+// Per-engine budget. Every engine gets its own slice (enforced in search()),
+// so a slow or blocked first engine cannot swallow the fallback's turn:
+// 2 × 6.5s stays inside the backend's own 15s timeout
+// (chain.ts DEFAULT_TIMEOUTS["browser-probe"]).
+const NAV_TIMEOUT_MS = 4000;
+const WAIT_FOR_RESULTS_MS = 2000;
+const ENGINE_BUDGET_MS = 6500;
 
 // ── browser-harness path ───────────────────────────────────────────────
 
@@ -285,11 +299,22 @@ function harnessScript(query: string, engine: Engine): string {
   return `
 import json
 u = ${JSON.stringify(engine.url(query))}
-new_tab(u)
+try:
+    before = current_tab().get("targetId") or current_tab().get("target_id")
+except Exception:
+    before = None
+tid = new_tab(u)
 wait_for_load()
 items = js("""
 ${engine.scrape}
 """)
+# Close only what we opened: new_tab reuses an existing blank tab instead of
+# creating one, and that tab is not ours to close.
+if tid and tid != before:
+    try:
+        close_tab(tid)
+    except Exception:
+        pass
 print("__RESULTS_JSON__" + json.dumps(items))
 `;
 }
@@ -442,16 +467,32 @@ export const browserProbeBackend: Backend = {
 
     const failures: string[] = [];
     for (const name of getEngineOrder()) {
+      // Each engine gets its own slice of the backend's timeout budget, so a
+      // slow or blocked first engine cannot eat the fallback's turn.
+      const engineCtl = new AbortController();
+      const onParentAbort = () => engineCtl.abort(signal.reason);
+      // A parent that aborted before this iteration never fires the listener,
+      // so forward the abort explicitly instead of letting the engine run its
+      // full budget before the catch below notices.
+      if (signal.aborted) engineCtl.abort(signal.reason);
+      signal.addEventListener("abort", onParentAbort, { once: true });
+      const timer = setTimeout(
+        () => engineCtl.abort(new Error(`${name} engine timeout`)),
+        ENGINE_BUDGET_MS,
+      );
       try {
         const { items, blocked } =
           chosen === "harness"
-            ? parseHarnessOutput(await runHarness(query, signal, ENGINES[name]))
-            : await runPlaywright(query, signal, ENGINES[name]);
+            ? parseHarnessOutput(await runHarness(query, engineCtl.signal, ENGINES[name]))
+            : await runPlaywright(query, engineCtl.signal, ENGINES[name]);
         if (items.length > 0) return items;
         failures.push(blocked ? `${name}: blocked (${blocked})` : `${name}: 0 results`);
       } catch (err) {
         if (signal.aborted) throw err;
         failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onParentAbort);
       }
     }
     throw new Error(`no engine returned results (${failures.join("; ")})`);

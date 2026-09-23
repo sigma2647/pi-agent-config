@@ -10,6 +10,7 @@
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { which, probeTcp } from "../../_common/tools/cli-helpers.ts";
+import { resolveCdpBase } from "../backends/browser.ts";
 
 const execFileP = promisify(execFile);
 
@@ -30,13 +31,14 @@ interface CaseResult {
 	stderrHead?: string;
 }
 
-// Mirrors doctor's availability check for the browser-probe backend: either a
-// reachable CDP endpoint or browser-harness on PATH, otherwise the chain skips it.
+// Mirrors doctor's availability check: browser-harness on PATH, or the CDP
+// endpoint the backend actually resolves (browser-probe's live browser), not a
+// hardcoded 9222. Diverging here made the case SKIP on setups where the
+// backend works fine.
 async function browserProbeAvailable(): Promise<boolean> {
 	if (await which("browser-harness")) return true;
-	const cdpUrl = process.env.PI_WEB_SEARCH_CDP_URL || "http://127.0.0.1:9222";
 	try {
-		const u = new URL(cdpUrl);
+		const u = new URL((await resolveCdpBase(true)).url);
 		return await probeTcp(u.hostname, Number(u.port) || (u.protocol === "https:" ? 443 : 80));
 	} catch {
 		return false;
