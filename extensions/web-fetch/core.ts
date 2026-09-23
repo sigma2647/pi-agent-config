@@ -182,18 +182,33 @@ export async function fetchAndExtract(
 
 	if (
 		httpResult.error.startsWith("Unsupported content type") ||
-		httpResult.error.startsWith("Response too large") ||
-		httpResult.error.startsWith("fetch failed")
+		httpResult.error.startsWith("Response too large")
 	) {
-		// Network/content-level dead ends — we never reached the origin
-		// (fetch failed) or the response is unusable by definition. Extra
-		// fallbacks (defuddle, Jina, playwright) hit the same wall. Return the
-		// diagnostic error without the misleading "JS-rendered/login-gated"
-		// suffix. NOTE: HTTP 5xx is deliberately NOT here — a 5xx means we DID
-		// reach the CDN/origin and it errored, often intermittently; Jina
-		// Reader fetches via a separate egress + cache and can still succeed,
-		// so 5xx falls through to the remaining chain.
-		log("→ returning: http error (network/content — no fallback)");
+		// Content-level dead ends: we DID reach the origin, it served something
+		// we can't use by definition. Extra fallbacks hit the same bytes.
+		// NOTE: HTTP 5xx is deliberately NOT here — a 5xx means the CDN/origin
+		// errored, often intermittently; Jina Reader uses a separate egress +
+		// cache and can still succeed, so 5xx falls through to the chain below.
+		log("→ returning: http error (content — no fallback)");
+		return httpResult;
+	}
+
+	if (httpResult.error.startsWith("fetch failed")) {
+		// Network-level dead end from OUR egress (proxy refused / timed out).
+		// That is not proof the page is unreachable: a real browser — its own
+		// TLS + HTTP/2 fingerprint, cookie jar and proxy handling — often loads
+		// pages that undici cannot. Reddit is the known case: undici via the
+		// local proxy times out and .json returns 403, while Chrome renders the
+		// same thread fine. So skip Jina (its egress is blocked the same way)
+		// but still give the browser one chance before giving up.
+		if (signal?.aborted) return { url, title: "", content: "", error: "Aborted" };
+		log("http+Readability fetch failed — skipping jina, trying browser-probe");
+		const viaBrowser = await time("browser-probe", () => extractWithBrowserProbe(ctx));
+		if (viaBrowser) {
+			log("→ returning: browser-probe");
+			return viaBrowser;
+		}
+		log("→ returning: http error (network — browser-probe also failed)");
 		return httpResult;
 	}
 

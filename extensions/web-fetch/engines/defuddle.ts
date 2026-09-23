@@ -62,16 +62,36 @@ export async function extractWithDefuddle(
 
 		const { document } = parseHTML(html);
 
-		// Silence noisy "Failed to parse URL" warnings from defuddle's metadata
-		// extractor (it often trips on relative canonical links).
-		// Use a re-entrant guard so two concurrent extractions don't interfere.
-		let suppressed = false;
-		let savedWarn = console.warn;
-		const filter = (...args: any[]) => {
-			if (suppressed && typeof args[0] === "string" && args[0].includes("Failed to parse URL:")) return;
-			savedWarn(...args);
-		};
-		console.warn = filter;
+		// Silence two kinds of internal library noise:
+	//  1. console.warn "Failed to parse URL" from defuddle's metadata extractor
+	//     (it often trips on relative canonical links).
+	//  2. console.error from defuddle's own catch blocks (prefix "Defuddle").
+	//     Those errors are already handled inside the library — it logs, then
+	//     carries on with the sync path — so the stack trace tells the caller
+	//     nothing that the fall-through chain doesn't. Common trigger: Reddit's
+	//     async extractor fetching old.reddit.com and getting a 403 because the
+	//     request comes from a datacenter IP.
+	// Both are re-routed to stderr only under PI_WF_DEBUG=1.
+	// Use a re-entrant guard so two concurrent extractions don't interfere.
+	let suppressed = false;
+	let savedWarn = console.warn;
+	let savedError = console.error;
+	const filter = (...args: any[]) => {
+		if (suppressed && typeof args[0] === "string" && args[0].includes("Failed to parse URL:")) return;
+		savedWarn(...args);
+	};
+	const errorFilter = (...args: any[]) => {
+		if (suppressed && args[0] === "Defuddle") {
+			if (process.env.PI_WF_DEBUG === "1") {
+				const detail = args.slice(1).map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a))).join(" ");
+				process.stderr.write(`[pi-wf] defuddle library: ${detail}\n`);
+			}
+			return;
+		}
+		savedError(...args);
+	};
+	console.warn = filter;
+	console.error = errorFilter;
 
 		try {
 			suppressed = true;
@@ -107,6 +127,7 @@ export async function extractWithDefuddle(
 		} finally {
 			suppressed = false;
 			console.warn = savedWarn;
+			console.error = savedError;
 		}
 	} catch (e) {
 		// FetchContext carries no debug flag; gate on the env var directly
