@@ -4,6 +4,9 @@
 > 字段**本身**能否让 pi(LLM agent)做出预期的工具路由(何时用 `web_search` /
 > `web_fetch` / `opencli` / `gh` …),而不是被全局 `AGENTS.md` 或 skill 间接教会。
 
+> ⚠️ **历史记录,不是现行指引。** opencli 已于 2026-09-22 从本仓库移除（CLI 也不再安装），
+> 下文出现的 `opencli …` 只反映当时的路由状态,不要再照它配置或复现。
+
 ## pi 的 headless 接口
 
 `pi` 支持非交互运行,输出可解析的 NDJSON 事件流:

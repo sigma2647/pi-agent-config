@@ -23,7 +23,6 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 - Site-scoped structured search → the site's dedicated CLI in bash (e.g. `zhihu search <query>`, `zhihu global <query>`); do not add site adapters to the general `web_search` fallback chain.
 - Rendered/authenticated/interactive browser work → prefer **Browser Probe** when a matching skill/tool path exists; native `agent_browser` is the fallback/compatibility path.
 - Native browser details and migration policy: `docs/browser-automation.md`.
-- OpenCLI Browser Bridge updates: `docs/opencli-extension-update.md`.
 
 ## Current architecture map
 

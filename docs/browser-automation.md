@@ -6,12 +6,12 @@ This page holds the detail that should not live in the always-on system prompt.
 
 1. **Known URL / static content** → `web_fetch` first.
 2. **General discovery** → `web_search`, then `web_fetch` the best results.
-3. **Site-scoped structured search** → `opencli <site> ... -f json` when an adapter exists.
+3. **Site-scoped structured search** → the site's dedicated CLI in bash (e.g. `zhihu search <query>`) when one is installed.
 4. **Rendered, authenticated, or interactive browser work** → prefer **Browser Probe** when a matching skill/tool path is available.
 5. **Fallback / native Pi browser work** → use native `agent_browser` when Browser Probe lacks the needed capability, the task explicitly requests it, or artifact/session/electron features are required.
-6. **Low-level debugging** → use CDP/opencli-browser/direct bash only when debugging those integrations or when the user asks for that workflow.
+6. **Low-level debugging** → use CDP/direct bash only when debugging those integrations or when the user asks for that workflow.
 
-Do not drive public search-engine forms with browser automation for discovery; use `web_search` or a site adapter.
+Do not drive public search-engine forms with browser automation for discovery; use `web_search` or a dedicated site CLI.
 Do not attempt CAPTCHA bypass.
 Stop before order/post/purchase/submit unless the user explicitly authorizes that final action.
 

@@ -130,7 +130,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 ## pi-ws 搜索后端
 
-三个后端按 `brave → browser-probe → opencli` 顺序尝试，遇到第一个非空结果即停止。
+两个后端按 `brave → browser-probe` 顺序尝试，遇到第一个非空结果即停止。
 
 ### Brave（推荐，质量最好）
 
@@ -141,35 +141,20 @@ echo 'BRAVE_SEARCH_API_KEY=BSA...' >> ~/.env
 
 ⚠️ **坑：API Key 格式。** 以 `BSA` 开头、约 31 字符。获取地址：https://brave.com/search/api/
 
-### opencli
-
-```bash
-npm install -g @jackwener/opencli
-```
-
-⚠️ **坑：opencli daemon 必须运行。** `pi-ws --doctor` 只检查 `which opencli`（二进制是否存在），不检查 daemon 是否在线。如果 daemon 未运行，opencli 后端会挂起直到超时（默认 6s），然后 fallback 到 browser-probe。
-
-验证 daemon：
-```bash
-opencli status  # 或 opencli info
-```
-
 ### browser-probe（CDP / Playwright）
 
-需要 Chromium 进程监听 `--remote-debugging-port=9222`：
+默认连接 browser-probe 当前 session 自己的浏览器，不需要手动开 9222：
 
 ```bash
-# 选项 A：Playwright 托管
-npx playwright install chromium
-# 然后浏览器后端通过 CDP 连接 http://127.0.0.1:9222
-
-# 选项 B：browser-harness（Python）
-# 安装 browser-harness 后自动检测
+browser-probe open            # 确保 browser-probe 的浏览器在跑
+pi-ws --doctor                # 打印实际连的地址和它的来源
 ```
+
+地址读自 `~/.browser-probe/active` 与 `sessions/<name>/daemon.json` 的 `chrome.port`；浏览器重启换端口时会自动重读。需要手动指定用 `PI_WEB_SEARCH_CDP_URL`，`PI_WEB_SEARCH_CDP_DISCOVER=0` 关掉自动查找（退回 `127.0.0.1:9222`）。没有可用 CDP 时回退到 `browser-harness`（装了才启用）。
 
 ⚠️ **坑：`npx playwright install chromium` 下载约 150MB。** 在 Docker 内可能较慢；可挂载宿主机缓存或预下载。
 
-⚠️ **坑：如果不安装 Chromium，browser 后端永远 SKIPPED。** 三个后端全部不可用时，`pi-ws` 返回 `kind: "fail"`——不会无限挂起。
+⚠️ **坑：如果不安装 Chromium，browser 后端永远 SKIPPED。** 两个后端全部不可用时，`pi-ws` 返回 `kind: "fail"`——不会无限挂起。
 
 ---
 
@@ -292,7 +277,6 @@ cd /tmp/fresh && npm ci          # added 140 packages in 3s
 | `ERROR: Extracted content appears incomplete` | 页面内容 < 500 字符（正常行为） | 换一个内容更丰富的 URL |
 | `connect timed out` + 海外 URL | 容器无代理或代理挂了 | 见上面代理配置章节 |
 | `brave: SKIPPED (not available)` | `BRAVE_SEARCH_API_KEY` 未设 | `echo 'BRAVE_SEARCH_API_KEY=...' >> ~/.env` |
-| `opencli: SKIPPED (not on PATH)` | opencli 未安装 | `npm install -g @jackwener/opencli` |
 | `browser: SKIPPED` | 无 CDP 端点 + 无 browser-harness | 不需要时忽略；需要时安装 Chromium |
 | `node: command not found` | Node 未安装或版本太旧 | Ubuntu 需从 NodeSource 装 24.x |
 | `local [local] ... the sherpa-onnx runtime is missing` | 没装到平台二进制包（多发生在 musl 发行版） | 在该扩展目录 `npm ci`；Alpine 等 musl 环境不支持 |

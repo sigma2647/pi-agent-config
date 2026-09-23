@@ -318,8 +318,9 @@ EOF
   cat <<'EOF'
 
 Optional for web_search backends:
-  - opencli         : npm install -g opencli  (then `opencli login` for sites that need it)
   - brave           : export BRAVE_SEARCH_API_KEY=...
+  - browser-probe   : run `browser-probe open` once; the web_search browser
+                      backend attaches to that daemon's browser automatically
   - browser-harness : npm install -g browser-harness   (or rely on playwright in PATH)
 EOF
 }

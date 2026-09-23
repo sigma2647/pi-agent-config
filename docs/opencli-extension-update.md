@@ -1,5 +1,8 @@
 # opencli Browser Bridge 扩展安装 & 更新
 
+> ⚠️ **历史记录，不是现行指引。** OpenCLI 已于 2026-09-22 从本仓库移除（CLI 也不再安装），
+> 本页只保留当时的扩展安装步骤备查，不要再照它配置。
+
 ## 首次安装
 
 Chromium 首次加载扩展分为两步：下载解压 → `chrome://extensions` 手动加载。**解压后必须立刻加载**，否则 Chromium 会清理掉未注册的 `UnpackedExtensions/` 目录。
