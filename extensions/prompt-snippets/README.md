@@ -21,12 +21,26 @@ standalone instruction — toggle exactly the ones you want per message.
 - When you send a message, active snippet bodies are merged into the message
   text: prepend group (sorted by `order`) → your text → append group (sorted
   by `order`), separated by blank lines.
+- A message that starts with `/` is a host command, so its text is left alone:
+  the host expands `/skill:<name>` only while it sits at position 0. The bodies
+  are delivered as their own messages around the command instead — prepend
+  before it, append after it.
 - Toggles reset to **all off** after each send and at session start.
 
 ## Snippet files
 
-Snippets live in `snippets/` next to `index.ts` — one markdown file each,
-with frontmatter:
+Snippets are one markdown file each, with frontmatter. Three directories are
+scanned in increasing priority — a file with the same name in a higher tier
+replaces the lower one:
+
+| Tier | Directory |
+|---|---|
+| 内置 built-in | `snippets/` next to `index.ts` |
+| 用户 user | `~/.pi/agent/snippets/` |
+| 项目 project | `<cwd>/.pi/snippets/` |
+
+The menu shows each snippet's tier. A file that fails to load (bad frontmatter
+or empty body) is reported when the menu opens, instead of vanishing silently.
 
 ```markdown
 ---

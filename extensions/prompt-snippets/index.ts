@@ -16,6 +16,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -29,6 +30,8 @@ interface Snippet {
 	placement: "prepend" | "append";
 	order: number;
 	body: string;
+	/** Directory it came from: the built-in, user, or project tier. */
+	sourceDir: string;
 }
 
 // Vim (j/k) and Emacs (Ctrl+N/Ctrl+P) aliases for the arrow keys. Ctrl+J is
@@ -43,9 +46,25 @@ function isNavDown(data: string): boolean {
 
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const snippetsDir = join(extensionDir, "snippets");
+const userSnippetsDir = join(homedir(), ".pi", "agent", "snippets");
+const projectSnippetsDir = join(process.cwd(), ".pi", "snippets");
 const WIDGET_ID = "prompt-snippets";
 
-function parseSnippet(filename: string, raw: string): Snippet | null {
+/** Snippet directories in increasing priority: built-in, then user, then project.
+ * A file with the same name in a higher-priority directory replaces the lower one. */
+function snippetDirs(): string[] {
+	return [...new Set([snippetsDir, userSnippetsDir, projectSnippetsDir])];
+}
+
+/** Which tier a snippet came from, for the menu. */
+function tierLabel(dir: string): string {
+	if (dir === snippetsDir) return "内置";
+	if (dir === userSnippetsDir) return "用户";
+	if (dir === projectSnippetsDir) return "项目";
+	return dir;
+}
+
+function parseSnippet(filename: string, raw: string, sourceDir: string): Snippet | null {
 	const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
 	if (!match) return null;
 
@@ -66,27 +85,52 @@ function parseSnippet(filename: string, raw: string): Snippet | null {
 		placement: meta.placement === "prepend" ? "prepend" : "append",
 		order: Number.isFinite(parsedOrder) ? parsedOrder : 9999,
 		body,
+		sourceDir,
 	};
 }
 
+interface LoadResult {
+	snippets: Snippet[];
+	/** Files that exist but could not be read or parsed (bad frontmatter or empty body). */
+	failed: string[];
+}
+
 /** Load all snippets, sorted: prepend group first, append group last, each by (order, name). */
-function loadSnippets(): Snippet[] {
-	if (!existsSync(snippetsDir)) return [];
-	const snippets: Snippet[] = [];
-	for (const file of readdirSync(snippetsDir)) {
-		if (!file.toLowerCase().endsWith(".md")) continue;
+function loadSnippets(): LoadResult {
+	const byName = new Map<string, Snippet>();
+	const failed: string[] = [];
+
+	for (const dir of snippetDirs()) {
+		if (!existsSync(dir)) continue;
+
+		let files: string[] = [];
 		try {
-			const snippet = parseSnippet(file, readFileSync(join(snippetsDir, file), "utf8"));
-			if (snippet) snippets.push(snippet);
+			files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".md"));
 		} catch {
-			// Skip unreadable files
+			continue; // became unreadable between the check and the read
+		}
+
+		for (const file of files) {
+			const where = `${file}（${tierLabel(dir)}）`;
+			try {
+				const snippet = parseSnippet(file, readFileSync(join(dir, file), "utf8"), dir);
+				if (snippet) byName.set(file, snippet);
+				else failed.push(where);
+			} catch {
+				failed.push(where);
+			}
 		}
 	}
+
 	const byOrder = (a: Snippet, b: Snippet) => a.order - b.order || a.name.localeCompare(b.name);
-	return [
-		...snippets.filter((s) => s.placement === "prepend").sort(byOrder),
-		...snippets.filter((s) => s.placement === "append").sort(byOrder),
-	];
+	const all = [...byName.values()];
+	return {
+		snippets: [
+			...all.filter((s) => s.placement === "prepend").sort(byOrder),
+			...all.filter((s) => s.placement === "append").sort(byOrder),
+		],
+		failed,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -94,6 +138,8 @@ export default function (pi: ExtensionAPI) {
 	let snippets: Snippet[] = [];
 	// Ids of currently toggled snippets. Resets to empty after each send and at session start.
 	let enabled = new Set<string>();
+	// Bodies waiting to be delivered around a "/" command message by the context hook.
+	let pendingCommand: { prepend: string[]; append: string[] } | null = null;
 
 	function updateWidget(ctx: ExtensionContext) {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
@@ -123,12 +169,16 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		snippets = loadSnippets();
+		const loaded = loadSnippets();
+		snippets = loaded.snippets;
+		if (loaded.failed.length > 0) {
+			ctx.ui.notify(`跳过了 ${loaded.failed.length} 个片段文件（frontmatter 非法或正文为空）：${loaded.failed.join("、")}`, "warning");
+		}
 		// Drop toggles for snippets that no longer exist on disk.
 		enabled = new Set([...enabled].filter((id) => snippets.some((s) => s.id === id)));
 
 		if (snippets.length === 0) {
-			ctx.ui.notify(`未找到片段：${snippetsDir}`, "warning");
+			ctx.ui.notify(`未找到片段：${snippetDirs().join("、")}`, "warning");
 			updateWidget(ctx);
 			return;
 		}
@@ -167,7 +217,7 @@ export default function (pi: ExtensionAPI) {
 			const buildPreviewRows = (snippet: Snippet, width: number): string[] => {
 				const rows: string[] = [];
 				rows.push(truncateToWidth(theme.bold(snippet.name), width));
-				rows.push(truncateToWidth(theme.fg("dim", `${snippet.placement === "prepend" ? "前置" : "后置"} · 顺序 ${snippet.order} · ${snippet.id}`), width));
+				rows.push(truncateToWidth(theme.fg("dim", `${snippet.placement === "prepend" ? "前置" : "后置"} · 顺序 ${snippet.order} · ${snippet.id} · ${tierLabel(snippet.sourceDir)}`), width));
 				rows.push(theme.fg("dim", "─".repeat(Math.min(width, 40))));
 				for (const line of snippet.body.split("\n")) {
 					for (const wrapped of wrapTextWithAnsi(line, width)) {
@@ -296,15 +346,17 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		enabled = new Set();
-		snippets = loadSnippets();
+		pendingCommand = null;
+		snippets = loadSnippets().snippets;
 		if (!existsSync(snippetsDir)) mkdirSync(snippetsDir, { recursive: true });
 		updateWidget(ctx);
 	});
 
 	pi.on("input", async (event, ctx) => {
+		pendingCommand = null; // a new turn replaces anything still waiting
 		if (enabled.size === 0) return; // continue unchanged
 
-		snippets = loadSnippets();
+		snippets = loadSnippets().snippets;
 		const active = snippets.filter((s) => enabled.has(s.id));
 		enabled = new Set();
 		updateWidget(ctx);
@@ -313,10 +365,36 @@ export default function (pi: ExtensionAPI) {
 
 		const prependBodies = active.filter((s) => s.placement === "prepend").map((s) => s.body);
 		const appendBodies = active.filter((s) => s.placement === "append").map((s) => s.body);
+		// A line starting with "/" is a host command, not a prompt: the host expands
+		// /skill:<name> only while it sits at position 0, so the text has to stay
+		// untouched. Stash the bodies for the context hook, which delivers them as
+		// their own messages around the command.
+		if (event.text.startsWith("/")) {
+			pendingCommand = { prepend: prependBodies, append: appendBodies };
+			return; // continue unchanged
+		}
 		return {
 			action: "transform",
 			text: [...prependBodies, event.text, ...appendBodies].join("\n\n"),
 		};
+	});
+
+	pi.on("context", (event, _ctx) => {
+		const bodies = pendingCommand;
+		if (!bodies) return;
+		// Injected messages are request-only (never persisted), so re-adding them on
+		// every request of the turn is idempotent — the turn keeps them after tool calls.
+		// The next input event clears the state.
+
+		let lastUser = event.messages.length - 1;
+		while (lastUser >= 0 && event.messages[lastUser].role !== "user") lastUser--;
+		if (lastUser === -1) return;
+
+		const asMessage = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }] });
+		const delivered = [...event.messages];
+		if (bodies.append.length > 0) delivered.splice(lastUser + 1, 0, asMessage(bodies.append.join("\n\n")));
+		if (bodies.prepend.length > 0) delivered.splice(lastUser, 0, asMessage(bodies.prepend.join("\n\n")));
+		return { messages: delivered };
 	});
 
 	pi.registerShortcut("alt+s", {
