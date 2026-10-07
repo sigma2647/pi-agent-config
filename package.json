@@ -12,7 +12,15 @@
     "prompts": ["./prompts"],
     "themes": ["./themes"]
   },
-  "dependencies": {
+  "peerDependencies": {
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
     "typebox": "^1.1.38"
   }
 }
