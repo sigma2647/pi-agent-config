@@ -53,6 +53,9 @@ function extensionFiles(pkgDir) {
 			files.push(abs);
 		} else if (existsSync(path.join(abs, "package.json"))) {
 			files.push(...extensionFiles(abs));
+		} else if (existsSync(path.join(abs, "index.ts"))) {
+			// Same fallback pi uses for a directory with no pi manifest.
+			files.push(path.join(abs, "index.ts"));
 		} else if (existsSync(`${abs}.ts`)) {
 			files.push(`${abs}.ts`);
 		} else {

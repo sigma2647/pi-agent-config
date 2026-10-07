@@ -1,3 +1,8 @@
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	Editor,
@@ -115,6 +120,102 @@ function createEditorTheme(theme: any): EditorTheme {
 			noMatch: (t) => theme.fg("warning", t),
 		},
 	};
+}
+
+/**
+ * The keys bound to an action, for hint text. Follows remapping; falls back to
+ * a literal label when the keybindings object is not usable.
+ */
+function keyHint(kb: any, action: string, fallback: string): string {
+	try {
+		const keys = kb?.getKeys?.(action);
+		if (Array.isArray(keys) && keys.length > 0) return String(keys[0]);
+	} catch {
+		// Fall through to the literal label.
+	}
+	return fallback;
+}
+
+/**
+ * Open $VISUAL/$EDITOR on the current answer and return the edited text. This is
+ * what the question UI has to do itself: the host's app.editor.external handler
+ * lives on the main editor component, which a custom UI replaces.
+ * Mirrors pi's own handler: stop the TUI, run the editor, start the TUI again.
+ */
+async function editExternally(tui: any, content: string): Promise<string | null> {
+	const command =
+		process.env.VISUAL || process.env.EDITOR || (process.platform === "win32" ? "notepad" : "nano");
+	const dir = mkdtempSync(join(tmpdir(), "pi-question-"));
+	const file = join(dir, "answer.md");
+	try {
+		writeFileSync(file, content, "utf8");
+		const [editor, ...args] = command.split(" ");
+		tui.stop();
+		let exitCode: number | null = null;
+		try {
+			// Not spawnSync: on Windows a synchronous child keeps the console input
+			// handle busy and races vim/nvim for it. Same reasoning as pi's handler.
+			exitCode = await new Promise<number | null>((resolve) => {
+				const child = spawn(editor!, [...args, file], {
+					stdio: "inherit",
+					shell: process.platform === "win32",
+				});
+				child.on("error", () => resolve(null));
+				child.on("close", (code) => resolve(code));
+			});
+		} finally {
+			tui.start();
+			tui.requestRender(true);
+		}
+		if (exitCode !== 0) return null;
+		return readFileSync(file, "utf8").replace(/^\uFEFF/, "").replace(/\n$/, "");
+	} catch {
+		return null;
+	} finally {
+		try {
+			rmSync(dir, { recursive: true, force: true });
+		} catch {
+			// Cleanup is best effort.
+		}
+	}
+}
+
+/**
+ * Save the clipboard image to a temp file and return its path, or null when the
+ * clipboard holds no image. The host's paste-image handler is internal, so the
+ * question UI reads the clipboard itself and the answer carries the file path
+ * for the agent to read.
+ */
+function clipboardImagePath(): string | null {
+	const candidates: string[][] = [
+		["wl-paste", "--type", "image/png"],
+		["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+		["pngpaste", "-"],
+	];
+	for (const [command, ...args] of candidates) {
+		try {
+			const result = spawnSync(command!, args, { maxBuffer: 64 * 1024 * 1024 });
+			if (result.error || result.status !== 0 || !result.stdout?.length) continue;
+			const file = join(tmpdir(), `pi-clipboard-${randomUUID()}.png`);
+			writeFileSync(file, result.stdout);
+			return file;
+		} catch {
+			// Try the next clipboard tool.
+		}
+	}
+	return null;
+}
+
+/**
+ * Paste the clipboard image path into the answer editor, on its own line so it
+ * never glues onto typed text. Returns false when the clipboard holds no image.
+ */
+function pasteClipboardImage(editor: Editor): boolean {
+	const file = clipboardImagePath();
+	if (!file) return false;
+	const current = editor.getText();
+	editor.insertTextAtCursor(current.length > 0 && !/\s$/.test(current) ? `\n${file}` : file);
+	return true;
 }
 
 // Vim (j/k) and Emacs (Ctrl+N/Ctrl+P) aliases for the arrow keys. Ctrl+J is
@@ -246,13 +347,15 @@ async function askSingleChoice(
 		{ id: "other", label: otherLabel, value: "__other__", isOther: true },
 	];
 
-	return ctx.ui.custom<AskAnswer | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer | null) => void) => {
+	return ctx.ui.custom<AskAnswer | null>((tui: any, theme: any, kb: any, done: (result: AskAnswer | null) => void) => {
 		const finish = bindAbort<AskAnswer | null>(signal, done);
 		let optionIndex = 0;
 		let editMode = false;
 		let cachedLines: string[] | undefined;
 		let cachedWidth = -1;
 		const editor = new Editor(tui, createEditorTheme(theme));
+		const imageHint = keyHint(kb, "app.clipboard.pasteImage", "ctrl+v");
+		const editorHint = keyHint(kb, "app.editor.external", "ctrl+g");
 
 		editor.onSubmit = (value) => {
 			const trimmed = value.trim();
@@ -265,6 +368,19 @@ async function askSingleChoice(
 			tui.requestRender();
 		}
 
+		async function writeExternally() {
+			const text = await editExternally(tui, editor.getExpandedText());
+			if (text === null) return;
+			editor.setText(text);
+			refresh();
+		}
+
+		function pasteImage() {
+			if (!pasteClipboardImage(editor)) return false;
+			refresh();
+			return true;
+		}
+
 		function handleInput(data: string) {
 			if (editMode) {
 				if (matchesKey(data, Key.escape)) {
@@ -273,6 +389,11 @@ async function askSingleChoice(
 					refresh();
 					return;
 				}
+				if (kb.matches(data, "app.editor.external")) {
+					void writeExternally();
+					return;
+				}
+				if (kb.matches(data, "app.clipboard.pasteImage") && pasteImage()) return;
 				editor.handleInput(data);
 				refresh();
 				return;
@@ -346,7 +467,7 @@ async function askSingleChoice(
 					add(` ${line}`);
 				}
 				lines.push("");
-				add(theme.fg("dim", " Enter to submit • Esc to go back"));
+				add(theme.fg("dim", ` Enter to submit • Esc to go back • ${imageHint} image • ${editorHint} editor`));
 			} else {
 				lines.push("");
 				add(theme.fg("dim", " ↑↓/jk navigate • Enter select • Esc cancel"));
@@ -388,7 +509,7 @@ async function askMultiChoice(
 		submitItem,
 	];
 
-	return ctx.ui.custom<AskAnswer[] | null>((tui: any, theme: any, _kb: any, done: (result: AskAnswer[] | null) => void) => {
+	return ctx.ui.custom<AskAnswer[] | null>((tui: any, theme: any, kb: any, done: (result: AskAnswer[] | null) => void) => {
 		const finish = bindAbort<AskAnswer[] | null>(signal, done);
 		let optionIndex = 0;
 		let editMode = false;
@@ -396,6 +517,8 @@ async function askMultiChoice(
 		let cachedWidth = -1;
 		const selected = new Map<string, AskAnswer>();
 		const editor = new Editor(tui, createEditorTheme(theme));
+		const imageHint = keyHint(kb, "app.clipboard.pasteImage", "ctrl+v");
+		const editorHint = keyHint(kb, "app.editor.external", "ctrl+g");
 
 		editor.onSubmit = (value) => {
 			const trimmed = value.trim();
@@ -408,6 +531,19 @@ async function askMultiChoice(
 		function refresh() {
 			cachedLines = undefined;
 			tui.requestRender();
+		}
+
+		async function writeExternally() {
+			const text = await editExternally(tui, editor.getExpandedText());
+			if (text === null) return;
+			editor.setText(text);
+			refresh();
+		}
+
+		function pasteImage() {
+			if (!pasteClipboardImage(editor)) return false;
+			refresh();
+			return true;
 		}
 
 		function toggleOption(item: DisplayOption) {
@@ -432,6 +568,11 @@ async function askMultiChoice(
 					refresh();
 					return;
 				}
+				if (kb.matches(data, "app.editor.external")) {
+					void writeExternally();
+					return;
+				}
+				if (kb.matches(data, "app.clipboard.pasteImage") && pasteImage()) return;
 				editor.handleInput(data);
 				refresh();
 				return;
@@ -550,7 +691,7 @@ async function askMultiChoice(
 					add(` ${line}`);
 				}
 				lines.push("");
-				add(theme.fg("dim", " Enter to save • Esc to go back"));
+				add(theme.fg("dim", ` Enter to save • Esc to go back • ${imageHint} image • ${editorHint} editor`));
 			} else {
 				lines.push("");
 				if (selected.size === 0) {

@@ -12,7 +12,7 @@ dotfiles because they are executable code assets.
 - `extensions/deepseek-cache-optimizer/` — DeepSeek prefix-cache hit optimization.
 - `extensions/prompt-snippets/` — toggleable prompt fragments (`alt+s` / `/snippets`) prepended or
   appended to a message.
-- `extensions/ask-user-question.ts` — `ask_user_question` tool for structured questions to the user.
+- `extensions/ask-user-question/` — `ask_user_question` tool for structured questions to the user.
 
 Directory-based extensions own their runtime files, package manifest, and
 tests. Historical or
