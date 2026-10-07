@@ -47,21 +47,23 @@ function isNavDown(data: string): boolean {
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 const snippetsDir = join(extensionDir, "snippets");
 const userSnippetsDir = join(homedir(), ".pi", "agent", "snippets");
-const projectSnippetsDir = join(process.cwd(), ".pi", "snippets");
 const WIDGET_ID = "prompt-snippets";
 
 /** Snippet directories in increasing priority: built-in, then user, then project.
- * A file with the same name in a higher-priority directory replaces the lower one. */
-function snippetDirs(): string[] {
-	return [...new Set([snippetsDir, userSnippetsDir, projectSnippetsDir])];
+ * A file with the same name in a higher-priority directory replaces the lower one.
+ * The project tier follows the session cwd, which can change mid-session, so it is
+ * resolved per call instead of captured at import time. */
+function snippetDirs(cwd: string): string[] {
+	return [...new Set([snippetsDir, userSnippetsDir, join(cwd, ".pi", "snippets")])];
 }
 
-/** Which tier a snippet came from, for the menu. */
+/** Which tier a snippet came from, for the menu. Anything that is not built-in or
+ * user came from the project tier — deliberately not compared against the current
+ * cwd, so a snippet loaded before a directory change keeps its label. */
 function tierLabel(dir: string): string {
 	if (dir === snippetsDir) return "内置";
 	if (dir === userSnippetsDir) return "用户";
-	if (dir === projectSnippetsDir) return "项目";
-	return dir;
+	return "项目";
 }
 
 function parseSnippet(filename: string, raw: string, sourceDir: string): Snippet | null {
@@ -96,11 +98,11 @@ interface LoadResult {
 }
 
 /** Load all snippets, sorted: prepend group first, append group last, each by (order, name). */
-function loadSnippets(): LoadResult {
+function loadSnippets(cwd: string): LoadResult {
 	const byName = new Map<string, Snippet>();
 	const failed: string[] = [];
 
-	for (const dir of snippetDirs()) {
+	for (const dir of snippetDirs(cwd)) {
 		if (!existsSync(dir)) continue;
 
 		let files: string[] = [];
@@ -169,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
-		const loaded = loadSnippets();
+		const loaded = loadSnippets(ctx.cwd);
 		snippets = loaded.snippets;
 		if (loaded.failed.length > 0) {
 			ctx.ui.notify(`跳过了 ${loaded.failed.length} 个片段文件（frontmatter 非法或正文为空）：${loaded.failed.join("、")}`, "warning");
@@ -178,7 +180,7 @@ export default function (pi: ExtensionAPI) {
 		enabled = new Set([...enabled].filter((id) => snippets.some((s) => s.id === id)));
 
 		if (snippets.length === 0) {
-			ctx.ui.notify(`未找到片段：${snippetDirs().join("、")}`, "warning");
+			ctx.ui.notify(`未找到片段：${snippetDirs(ctx.cwd).join("、")}`, "warning");
 			updateWidget(ctx);
 			return;
 		}
@@ -347,7 +349,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		enabled = new Set();
 		pendingCommand = null;
-		snippets = loadSnippets().snippets;
+		snippets = loadSnippets(ctx.cwd).snippets;
 		if (!existsSync(snippetsDir)) mkdirSync(snippetsDir, { recursive: true });
 		updateWidget(ctx);
 	});
@@ -356,7 +358,7 @@ export default function (pi: ExtensionAPI) {
 		pendingCommand = null; // a new turn replaces anything still waiting
 		if (enabled.size === 0) return; // continue unchanged
 
-		snippets = loadSnippets().snippets;
+		snippets = loadSnippets(ctx.cwd).snippets;
 		const active = snippets.filter((s) => enabled.has(s.id));
 		enabled = new Set();
 		updateWidget(ctx);
