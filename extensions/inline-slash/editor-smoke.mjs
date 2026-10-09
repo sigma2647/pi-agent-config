@@ -144,6 +144,9 @@ check("the sentence survives", sent.text?.endsWith("用 核对事实，标注不
 editor.setText("");
 await type("/p-fact");
 check("line start keeps the built-in menu", JSON.stringify(items()) === '["p-fact-check","p-fact-check-deep"]');
+editor.handleInput("\t");
+await settle();
+check("line start accepts without losing the slash", editor.getText() === "/p-fact-check ", JSON.stringify(editor.getText()));
 
 editor.setText("");
 await type("看 /usr/local");

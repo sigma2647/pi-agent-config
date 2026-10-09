@@ -119,8 +119,25 @@ assert.equal(
 	"用 /skill:code-review ",
 );
 
-// Line start belongs to the built-in menu.
+// Line start belongs to the built-in menu — and to the built-in's applyCompletion:
+// its items carry no slash (it adds the slash itself), so rebuilding from them would
+// drop it. Ours must hand the keystroke back.
 assert.equal(await provider.getSuggestions(["/p"], 0, 2, { signal }), null);
+const delegated = [];
+const builtin = {
+	getSuggestions: async () => null,
+	applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
+		delegated.push(prefix);
+		return { lines: [`/${item.value} `], cursorLine, cursorCol };
+	},
+	shouldTriggerFileCompletion: () => true,
+};
+const lineStart = createInlineSlashProvider(builtin, fakePi);
+assert.deepEqual(
+	lineStart.applyCompletion(["/p-fact"], 0, 7, { value: "p-fact-check" }, "/p-fact"),
+	{ lines: ["/p-fact-check "], cursorLine: 0, cursorCol: 7 },
+);
+assert.deepEqual(delegated, ["/p-fact"]);
 // Path-like input is not a token.
 assert.equal(await provider.getSuggestions(["看 /usr/local"], 0, 13, { signal }), null);
 

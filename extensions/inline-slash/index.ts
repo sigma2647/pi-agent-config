@@ -251,7 +251,10 @@ export function createInlineSlashProvider(
 		applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
 			const line = lines[cursorLine] ?? "";
 			// Mid-sentence the built-in would treat a `/` prefix as a path, so replace it here.
-			if (!prefix.startsWith("/") || !line.slice(0, cursorCol).endsWith(prefix)) {
+			// Only for our own items: ours carry the slash in `value` (see `toItems`),
+			// the built-in's do not and its own applyCompletion adds it — rebuilding from
+			// those would drop the slash, which is what line start hands us.
+			if (!prefix.startsWith("/") || !item.value.startsWith("/") || !line.slice(0, cursorCol).endsWith(prefix)) {
 				return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
 			}
 			const start = cursorCol - prefix.length;
