@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "postinstall": "npm install --prefix extensions/web-fetch && npm install --prefix extensions/subagents && npm install --prefix extensions/dictation",
-    "test:subagents": "npm --prefix extensions/subagents test && node --test extensions/subagents/test/system-prompt-mode.test.ts"
+    "test:subagents": "npm --prefix extensions/subagents test && node --test extensions/subagents/test/system-prompt-mode.test.ts",
+    "test:prompt-history": "node --experimental-strip-types --no-warnings --test extensions/prompt-history/test/*.test.ts && node extensions/prompt-history/test/editor-smoke.mjs",
+    "test:inline-slash": "node --experimental-strip-types --no-warnings extensions/inline-slash/check.mjs"
   },
   "pi": {
-    "extensions": ["./extensions/deepseek-cache-optimizer/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents", "./extensions/prompt-snippets/index.ts", "./extensions/ask-user-question", "./extensions/dictation"],
+    "extensions": ["./extensions/deepseek-cache-optimizer/index.ts", "./extensions/web-search", "./extensions/web-fetch", "./extensions/subagents", "./extensions/prompt-snippets/index.ts", "./extensions/ask-user-question", "./extensions/dictation", "./extensions/prompt-history", "./extensions/auto-title", "./extensions/inline-slash"],
     "skills": ["./skills"],
     "prompts": ["./prompts"],
     "themes": ["./themes"]

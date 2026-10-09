@@ -33,6 +33,9 @@ extensions/web-fetch/          single URL fetch/extract (pi-wf)
 extensions/web-search/         brave → browser-probe search (pi-ws)
 extensions/subagents/          async mux-backed subagent package
 extensions/dictation/          offline + cloud speech-to-text dictation (pi-dictation)
+extensions/prompt-history/     ctrl+r reverse search over prompt history, floating panel
+extensions/auto-title/         Chinese session title from the conversation, pushed to the herdr tab
+extensions/inline-slash/      complete + expand a prompt template (/name) anywhere in a sentence
 extensions/_common/            shared utilities
 ```
 

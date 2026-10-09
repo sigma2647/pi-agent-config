@@ -45,6 +45,13 @@ extensions/
 │   ├── pi-extension/    ← async mux-backed subagent extension implementation
 │   ├── agents/          ← bundled definitions (planner/scout/worker/reviewer/etc.)
 │   └── test/            ← upstream Node smoke/integration tests
+├── prompt-history/      ← Ctrl+R reverse search over prompt history (floating panel)
+│   ├── index.ts         ← editor wrapper (hotkey) + SearchOverlay (the panel)
+│   ├── history.ts       ← session sources (live branch + same-cwd sessions)
+│   ├── prompts.ts       ← session entries → prompts (pure)
+│   └── search.ts        ← fuzzy matching + panel rendering (pure)
+├── auto-title/          ← Chinese session title (pi session name + herdr tab name)
+│   └── index.ts         ← title generation, herdr tab renaming
 └── _common/             ← shared utilities (playwright resolver, CLI helpers)
 ```
 
