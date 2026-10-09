@@ -36,13 +36,13 @@ const DEFAULT_TIMEOUTS: Record<string, number> = {
   brave: 4000,
   exa: 5000,
   // browser.ts walks 2 inner engines (google → bing), each with its own
-  // 6.5s budget: 2 × 6.5s = 13s stays inside the backend's own 21s timeout,
-  // which keeps its headroom for browser startup on a cold session.
-  "browser-probe": 21000,
+  // 6.5s budget: 2 × 6.5s = 13s, so 15s holds the worst case plus the browser
+  // start on a cold session.
+  "browser-probe": 15000,
 };
 
-// brave (4s) + browser-probe (21s) must fit inside this.
-const DEFAULT_TOTAL_TIMEOUT_MS = 30000;
+// brave (4s) + browser-probe (15s) must fit inside this.
+const DEFAULT_TOTAL_TIMEOUT_MS = 25000;
 // Opt-in backends (exa) are registered but stay out of the default chain;
 // enable them with PI_WEB_SEARCH_CHAIN or --chain.
 const DEFAULT_CHAIN = ["brave", "browser-probe"];

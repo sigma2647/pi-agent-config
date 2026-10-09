@@ -25,7 +25,7 @@ const USAGE = `usage:
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
   PI_WEB_SEARCH_CHAIN              "brave,browser-probe"
-  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 30000
+  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 25000
   PI_WEB_SEARCH_TIMEOUT_<BACKEND>  per-backend, ms
   PI_WEB_SEARCH_ENGINE             google|bing — pin the browser-probe
                                    engine (default: google → bing)

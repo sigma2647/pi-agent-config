@@ -288,7 +288,7 @@ export function getEngineOrder(): EngineName[] {
 
 // Per-engine budget. Every engine gets its own slice (enforced in search()),
 // so a slow or blocked first engine cannot swallow the fallback's turn:
-// 2 × 6.5s = 13s stays inside the backend's own 21s timeout
+// 2 × 6.5s = 13s stays inside the backend's own 15s timeout
 // (chain.ts DEFAULT_TIMEOUTS["browser-probe"]).
 const NAV_TIMEOUT_MS = 4000;
 const WAIT_FOR_RESULTS_MS = 2000;

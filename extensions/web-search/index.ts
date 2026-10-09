@@ -5,7 +5,7 @@
  * 配置：
  *   - PI_WEB_SEARCH_CHAIN="brave,browser-probe"
  *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _BROWSER_PROBE  (毫秒)
- *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 30000)
+ *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 25000)
  *   - PI_WEB_SEARCH_BROWSER_PROBE_BACKEND=auto|harness|playwright
  *   - PI_WEB_SEARCH_ENGINE=google|bing  (默认 google→bing，逐个回退)
  *   - PI_WEB_SEARCH_CDP_URL  (显式指定浏览器调试端口；不设时自动用

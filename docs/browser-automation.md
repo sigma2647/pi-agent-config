@@ -21,6 +21,10 @@ Two boundaries that are easy to get wrong:
   appears after JS, sits behind a login, or the static path hit a bot wall.
 - After `web_search` returns URLs: hand a URL to the browser only when its body
   needs login, JS, or the static fetch failed; otherwise `web_fetch` it.
+- Browser Probe `read` is not the cheap reader. On the same pages it returns 1.9×
+  the bytes / 2.75× the characters of `web_fetch` (worst case 24.3× on
+  Xiaohongshu, measured 2026-10-09). Default to `web_fetch`; reach for the
+  browser when a boundary above says the static path cannot work.
 
 ## Fallback chains (three real ones)
 
@@ -123,65 +127,16 @@ For dashboard, feed, timeline, or nested-scroll tasks:
 
 For downloads, use a command that saves the file to disk (`download <selector> <path>` or the relevant Browser Probe flow); do not rely on a click alone.
 
-## Optional change list
+## Open questions
 
-Format: problem → change → cost → recommendation.
+Two decisions are still open; everything above is a live rule.
 
-1. **A bot-wall page is returned as a normal result (WeChat `wappoc_appmsgcaptcha`)** →
-   detect the CAPTCHA landing (302 target, or a body with no `#js_content`) and
-   raise `BlockedError` the same way `read`/`weixin` already do → **done**
-   (`src/extract/weixin-blocked.ts` checks the landed `window.location.href` for
-   `wappoc_appmsgcaptcha` and the body for `环境异常` without `#js_content`; `read`
-   and `weixin` both raise via `dispatch.ts` → `assertNotBlocked`. Covered by
-   `tests/extract/weixin-blocked.test.ts`, incl. the false-positive cases. The
-   302 landing was already inside that check — it is `location.href`, not the
-   requested URL).
-
-2. **Browser Probe reads as the bottom of the chain, so it only ever sees the hard
-   cases (survivorship bias)** → log the winning entry per task: add a
-   `winner: <backend>` line where `extensions/web-search/chain.ts` stops early
-   (and reuse web-fetch `core.ts`'s existing `→ returning: <engine>` logs) →
-   needs a measurement pass before any routing change → **measured 2026-10-09
-   (`/tmp/web-token-bench/REPORT.md`)**. The pass exists now, and it did not
-   produce a case for promoting Browser Probe wholesale: it is the strategic
-   *browser* path, not the cheap reader (its `read` output is 1.9× the bytes /
-   2.75× the characters of `web_fetch` on the same pages, worst case 24.3× on
-   Xiaohongshu), and the one routing miss it did surface was on the search side —
-   which item 3 below fixes. The `winner:` log line is still not added: the chain
-   attempt list already carries the winning `backend` plus each entry's `kind`,
-   which is what the measurement needed.
-
-3. **Brave returns a non-empty but low-quality list** → add a
-   `lowQuality(results)` predicate in `extensions/web-search/chain.ts` (reuse
-   browser-probe `search`'s "nearly all one host" rule) and continue to the next
-   backend when it fires → quality heuristics over-trigger easily → **done
-   2026-10-09** as the strength gate (`validate.ts:isStrongResultSet`, called from
-   `chain.ts`): result count below `MIN_STRONG_RESULTS` (3), or no single result
-   carrying more than `MIN_TOKEN_HITS` (2) query tokens, means "weak → escalate".
-   The predicate is a count + token bar rather than the host-concentration rule:
-   host concentration did not show up in the measurements, a thin set did, and
-   the token bar is built on the constant `isRelevant` already uses instead of a
-   second copy. Costs one extra backend call when it over-triggers, bounded by the
-   per-backend budgets; leaves `fast` and `--chain` untouched. Covered by
-   `extensions/web-search/test/chain-gate.test.ts` (weak escalates, strong stops,
-   a weak set is kept when nothing stronger arrives, empty still escalates).
-
-4. **How to turn Exa on, and when it is worth it** → document the switch: Exa is
-   registered in `extensions/web-search/chain.ts` but kept out of `DEFAULT_CHAIN`;
-   enable it with `--chain exa,brave` (or `--chain exa`) → extra API cost →
-   **pending** (list the long-tail / semantic cases that justify it).
-
-5. **The `agent_browser` migration policy is missing** — the old root
-   `AGENTS.md` pointed at a `docs/browser-automation.md` section that does not
-   exist → write a short section: what stays on native `agent_browser`, what
-   migrates to Browser Probe, and the exit condition → needs a decision on whether
-   `agent_browser` is still in use → **do it** (at minimum record "keep, no
-   migration planned").
-
-6. **`web_fetch` vs `browser-probe read`, and when `web_search` results go to the
-   browser** → turn the two boundary heuristics above into an explicit
-   condition → route table under the boundaries section: default `web_fetch`;
-   escalate to `browser-probe read` only when the fetch error names JS/login, the
-   rendered body is empty, or the page needs the logged-in profile → low cost,
-   but more rules risk more drift → **partly done** (interim rule written above;
-   add the table only if the rule keeps being wrong).
+- **`agent_browser`: keep or migrate.** The route table lists native
+  `agent_browser` / direct CDP as the compatibility fallback, but nothing records
+  whether it is still in use. Decide one way and write it down: "keep, no
+  migration planned", or name what moves to Browser Probe and the condition that
+  ends the old path.
+- **When Exa earns its extra call.** Exa is registered and kept out of the default
+  chain; opt in with `--chain exa,brave`. Which long-tail or semantic queries it
+  actually beats Brave on has not been measured, and until it is, do not add it to
+  the default chain.
