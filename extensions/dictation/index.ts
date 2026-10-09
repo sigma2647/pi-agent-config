@@ -34,6 +34,7 @@ import { resolveStrings, type Strings } from "./strings.ts";
 import {
   applyLiveDraft,
   createDictationEditorFactory,
+  matchesKeybind,
   offsetCursor,
   padAtCaret,
   placeEditorCursor,
@@ -629,7 +630,7 @@ export default async function dictationExtension(pi: ExtensionAPI) {
     if (editorHelpers && typeof ctx.ui.onTerminalInput === "function") {
       rawInputCleanup = ctx.ui.onTerminalInput((data) => {
         const helpers = editorHelpers;
-        if (!helpers?.matchesKey(data, config.keybind)) return undefined;
+        if (!helpers || !matchesKeybind(helpers, data, config.keybind)) return undefined;
         const active = sessionCtx ?? ctx;
 
         if (helpers.isKeyRelease(data)) {

@@ -35,6 +35,22 @@ export type EditorHelpers = {
 /** The slice of pi's editor factory this module needs. */
 export type BaseEditorFactory = (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => EditorComponent;
 
+/**
+ * Match a keystroke against the configured keybind.
+ *
+ * pi-tui knows function keys only in their legacy form (`\x1b[18~` for F7). A
+ * terminal that speaks the Kitty keyboard protocol reports them with the
+ * modifier and event type appended (`\x1b[18;1~`, `\x1b[18;1:3~` for the
+ * release), which pi-tui does not recognise — so an F-key hotkey would never
+ * fire there. Retry the unmodified legacy form before giving up. Only the "no
+ * modifiers" encoding is folded: ctrl+F7 (`\x1b[18;5~`) stays a different key.
+ */
+export const matchesKeybind = (helpers: EditorHelpers, data: string, keybind: string): boolean => {
+  if (helpers.matchesKey(data, keybind)) return true;
+  const kitty = /^\x1b\[(\d+);1(?::\d+)?~$/.exec(data);
+  return kitty ? helpers.matchesKey(`\x1b[${kitty[1]}~`, keybind) : false;
+};
+
 const BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 export const formatClock = (ms: number): string => {
@@ -449,7 +465,7 @@ class DictationEditor implements EditorComponent {
     const ctx = this.options.getContext();
     const state = this.options.getState();
 
-    if (this.options.helpers.matchesKey(data, this.options.keybind)) {
+    if (matchesKeybind(this.options.helpers, data, this.options.keybind)) {
       this.options.onToggle(ctx);
       return;
     }
