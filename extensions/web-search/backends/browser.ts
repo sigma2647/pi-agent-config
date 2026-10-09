@@ -147,20 +147,21 @@ async function pickAvailable(): Promise<PickedBackend> {
 
 // ── Engines ────────────────────────────────────────────────────────────
 //
-// Google first, Bing second — the same order the `browser-probe search`
-// surface uses, so `web_search --chain browser-probe` and a direct
+// Google → Bing: the same engines, in the same order, that the
+// `browser-probe search` surface walks (`src/search/engines.ts`,
+// FALLBACK_CHAIN), so `web_search --chain browser-probe` and a direct
 // `browser_probe ["search", ...]` call see the same SERP instead of silently
-// diverging (this backend used to hardcode Bing).
+// diverging (this backend used to hardcode Bing, then Bing + Google).
 //
-// Bing stays as the fallback: html.duckduckgo.com/html/ serves a CAPTCHA to
+// Bing stays as the last fallback: html.duckduckgo.com/html/ serves a CAPTCHA to
 // every fetch, search.brave.com CAPTCHAs anonymous scrapes, and Google can
 // serve a consent interstitial or reject an automated navigation. Bing's
 // organic page is permissive and its markup is stable.
 //
 // Forcing one engine (no fallback) is `PI_WEB_SEARCH_ENGINE=google|bing`.
 //
-// Both engines need a URL decoder: Bing wraps targets in
-// `bing.com/ck/a?u=a1<urlsafe-b64>` and Google sends some results through
+// Every engine needs a URL decoder: Bing wraps targets in
+// `bing.com/ck/a?u=a1<urlsafe-b64>`, and Google sends some results through
 // `/url?q=<target>`.
 
 type EngineName = "google" | "bing";
@@ -287,7 +288,7 @@ export function getEngineOrder(): EngineName[] {
 
 // Per-engine budget. Every engine gets its own slice (enforced in search()),
 // so a slow or blocked first engine cannot swallow the fallback's turn:
-// 2 × 6.5s stays inside the backend's own 15s timeout
+// 2 × 6.5s = 13s stays inside the backend's own 21s timeout
 // (chain.ts DEFAULT_TIMEOUTS["browser-probe"]).
 const NAV_TIMEOUT_MS = 4000;
 const WAIT_FOR_RESULTS_MS = 2000;

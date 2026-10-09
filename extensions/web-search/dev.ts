@@ -25,10 +25,10 @@ const USAGE = `usage:
 env:
   PI_WS_FORMAT=human|json          override CLI default output format
   PI_WEB_SEARCH_CHAIN              "brave,browser-probe"
-  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 25000
+  PI_WEB_SEARCH_TOTAL_TIMEOUT      ms, default 30000
   PI_WEB_SEARCH_TIMEOUT_<BACKEND>  per-backend, ms
-  PI_WEB_SEARCH_ENGINE             google|bing — pin the browser-probe engine
-                                   (default: google, then bing)
+  PI_WEB_SEARCH_ENGINE             google|bing — pin the browser-probe
+                                   engine (default: google → bing)
   PI_WEB_SEARCH_CDP_URL            explicit browser CDP endpoint; when unset the
                                    backend uses browser-probe's live session
                                    browser, then 127.0.0.1:9222
@@ -169,7 +169,8 @@ if (result.kind === "ok") {
 		const tag =
 			a.status.kind === "skipped" ? "SKIPPED" :
 			a.status.kind === "failed"  ? "FAILED"  :
-			a.status.kind === "empty"   ? "EMPTY"   : "OK";
+			a.status.kind === "empty"   ? "EMPTY"   :
+			a.status.kind === "weak"    ? "WEAK"    : "OK";
 		const reason = a.status.kind === "ok" ? `${a.status.resultCount} results` : a.status.reason;
 		console.error(`  - ${a.name}: ${tag} (${reason}) [${a.elapsedMs}ms]`);
 	}

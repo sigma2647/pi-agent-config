@@ -69,16 +69,53 @@ export function extractTokens(query: string): string[] {
 // query actually has, so a single-token query ("jev") still matches on one.
 const MIN_TOKEN_HITS = 2;
 
+function tokenHits(hay: string, tokens: string[]): number {
+  let hits = 0;
+  for (const t of tokens) if (hay.includes(t)) hits++;
+  return hits;
+}
+
 export function isRelevant(query: string, r: SearchResult): boolean {
   const tokens = extractTokens(query);
   if (tokens.length === 0) return true; // pure-symbol query → don't filter
   const hay = `${r.title} ${r.snippet}`.toLowerCase();
-  const required = Math.min(MIN_TOKEN_HITS, tokens.length);
-  let hits = 0;
-  for (const t of tokens) {
-    if (hay.includes(t) && ++hits >= required) return true;
-  }
-  return false;
+  return tokenHits(hay, tokens) >= Math.min(MIN_TOKEN_HITS, tokens.length);
+}
+
+// ── Fallback-chain strength gate ───────────────────────────────────────
+//
+// A non-empty result set is not automatically good enough to stop the chain on.
+// Measured 2026-10-09 (/tmp/web-token-bench/REPORT.md, test 1): a Chinese query
+// returned a thin Brave set, the chain stopped there, and the browser-probe
+// fallback — whose engines cover Chinese queries far better — never ran. So the
+// chain escalates while the set is weak.
+//
+// "Weak" = fewer than MIN_STRONG_RESULTS results, or no single result carrying
+// more than the MIN_TOKEN_HITS bar `isRelevant` already uses. The bar is built
+// on that same constant rather than a second copy: one definition of "how much
+// query does a result have to carry", two callers. It is deliberately low —
+// this only has to catch "a thin page of near-misses", and over-triggering
+// costs one fallback call (browser-probe's own "nearly all one host" → `low`
+// rule is the same idea at a different layer).
+export const MIN_STRONG_RESULTS = 3;
+
+/** Token hits one result must carry to count as confidently on-topic. */
+export const STRONG_TOKEN_HITS = MIN_TOKEN_HITS + 1;
+
+/** True when `results` is a set worth stopping the fallback chain on. */
+export function isStrongResultSet(
+  query: string,
+  results: SearchResult[],
+): boolean {
+  if (results.length === 0) return false;
+  const tokens = extractTokens(query);
+  // Unfilterable query (pure symbols): any result is as good as it gets.
+  if (tokens.length === 0) return true;
+  if (results.length < MIN_STRONG_RESULTS) return false;
+  const bar = Math.min(STRONG_TOKEN_HITS, tokens.length);
+  return results.some(
+    (r) => tokenHits(`${r.title} ${r.snippet}`.toLowerCase(), tokens) >= bar,
+  );
 }
 
 export function filterRelevant(

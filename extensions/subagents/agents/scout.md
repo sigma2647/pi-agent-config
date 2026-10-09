@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast codebase reconnaissance - maps existing code, conventions, and patterns for a task
-tools: read, grep, find, ls, bash, write
+tools: read, grep, find, ls, bash, write, codemode
 deny-tools: claude
 output: context.md
 spawning: false

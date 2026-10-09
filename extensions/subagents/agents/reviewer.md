@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Code review agent - reviews changes for quality, security, and correctness
-tools: read, grep, find, ls, bash, write
+tools: read, grep, find, ls, bash, write, codemode
 thinking: medium
 spawning: false
 auto-exit: true

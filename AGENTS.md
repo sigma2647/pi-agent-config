@@ -18,11 +18,8 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 
 ## Web and browser routing
 
-- Known URL → `web_fetch`.
-- General discovery → `web_search`, then `web_fetch` relevant results.
-- Site-scoped structured search → the site's dedicated CLI in bash (e.g. `zhihu search <query>`, `zhihu global <query>`); do not add site adapters to the general `web_search` fallback chain.
-- Rendered/authenticated/interactive browser work → prefer **Browser Probe** when a matching skill/tool path exists; native `agent_browser` is the fallback/compatibility path.
-- Native browser details and migration policy: `docs/browser-automation.md`.
+- Four entry points (known URL → `web_fetch`; discovery → `web_search`; site-scoped search → the site CLI; rendered/authenticated/interactive → Browser Probe) plus a compatibility fallback (native `agent_browser` / direct CDP); their boundaries, the three fallback chains, and bot-wall semantics all live in `docs/browser-automation.md` — the single source of truth. Read it before adding a routing rule; do not restate it here.
+- Fallback in one line: every fetch chain descends to Browser Probe before Playwright; `web_search` stops at the first *strong* result set (weak = fewer than 3 results, or no result carrying more than 2 query tokens), otherwise it escalates to the next chain entry and keeps the last weak set if nothing stronger arrives; Browser Probe `search` walks Google → Bing.
 
 ## Current architecture map
 
@@ -35,14 +32,12 @@ extensions/subagents/          async mux-backed subagent package
 extensions/dictation/          offline + cloud speech-to-text dictation (pi-dictation)
 extensions/prompt-history/     ctrl+r reverse search over prompt history, floating panel
 extensions/auto-title/         Chinese session title from the conversation, pushed to the herdr tab
-extensions/inline-slash/      complete + expand a prompt template (/name) anywhere in a sentence
+extensions/inline-slash/      complete templates & skills, expand them anywhere in a sentence
 extensions/_common/            shared utilities
 ```
 
 ## Fallback chains
 
-- **web-fetch:** domain extractor → Defuddle → Readability → Jina → Browser Probe → Playwright. Defuddle default; opt out with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`.
-- **web-search:** `brave → browser-probe`, stop at first non-empty result. Exa is opt-in only.
 - **subagents:** async fire-and-return; results arrive automatically. Bundled specialists use `system-prompt: replace` + `context-files: project`.
 
 ## Collaboration patterns

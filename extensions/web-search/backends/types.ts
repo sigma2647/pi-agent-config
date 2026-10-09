@@ -10,7 +10,11 @@ export type BackendStatus =
   | { kind: "ok"; resultCount: number }
   | { kind: "skipped"; reason: string }
   | { kind: "failed"; reason: string }
-  | { kind: "empty"; reason: string };
+  | { kind: "empty"; reason: string }
+  // Non-empty, but the set failed validate.ts's strength bar, so the chain
+  // escalated past it. Distinct from "ok" (the set was used) and from "empty"
+  // (there was nothing at all) — the caller's fallback story depends on which.
+  | { kind: "weak"; resultCount: number; reason: string };
 
 /**
  * Per-call options carried through the chain to each backend. Today only

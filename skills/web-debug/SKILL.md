@@ -217,8 +217,9 @@ These are the ones that have already bitten — internalize them.
 
 ## When *not* to reach for these tools
 
-- If you only need to read static content from a public URL, `web_fetch` is
-  faster (no browser launch, no profile state).
+- For which tool fits which kind of page (static, rendered, or search), see the
+  single routing authority, `docs/browser-automation.md`; this skill only covers
+  driving the live page.
 - If the question is purely about source code, read the source. The browser
   doesn't tell you why a function was written, only what it does at runtime.
 - If you need to verify behavior across many URLs at scale, write a script

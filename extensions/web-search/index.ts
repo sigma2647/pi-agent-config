@@ -5,9 +5,9 @@
  * 配置：
  *   - PI_WEB_SEARCH_CHAIN="brave,browser-probe"
  *   - PI_WEB_SEARCH_TIMEOUT_BRAVE / _BROWSER_PROBE  (毫秒)
- *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 25000)
+ *   - PI_WEB_SEARCH_TOTAL_TIMEOUT  (毫秒，默认 30000)
  *   - PI_WEB_SEARCH_BROWSER_PROBE_BACKEND=auto|harness|playwright
- *   - PI_WEB_SEARCH_ENGINE=google|bing  (默认 google，失败回退 bing)
+ *   - PI_WEB_SEARCH_ENGINE=google|bing  (默认 google→bing，逐个回退)
  *   - PI_WEB_SEARCH_CDP_URL  (显式指定浏览器调试端口；不设时自动用
  *     browser-probe 当前 session 的浏览器，再退回 127.0.0.1:9222)
  *   - PI_WEB_SEARCH_CDP_DISCOVER=0  (关掉上面的自动发现)
@@ -87,7 +87,9 @@ function formatFailure(query: string, attempts: BackendAttempt[]): string {
           ? "FAILED"
           : a.status.kind === "empty"
             ? "EMPTY"
-            : "OK";
+            : a.status.kind === "weak"
+              ? "WEAK"
+              : "OK";
     const reason =
       a.status.kind === "ok"
         ? `${a.status.resultCount} results`
@@ -120,8 +122,8 @@ export default function (pi: ExtensionAPI) {
       "Use web_search to DISCOVER URLs. Snippets are previews, not answers — follow up with web_fetch on top results to read full pages.",
       "For structured site search (Bilibili, YouTube, arXiv, etc.), prefer a dedicated site CLI via bash when one is installed (e.g. `zhihu search <query>`); otherwise fall back to web_search or the browser_probe `search` surface.",
       "For Zhihu content, use the `zhihu` CLI via bash: `zhihu search <query>` (on-site) / `zhihu global <query>` (whole web) / `zhihu hot` (trending). Output is a JSON envelope — parse with `jq`, not `head`/`grep`. It needs no login. Use it instead of a general web_search for Zhihu questions and answers.",
-      "When Brave returns nothing, you want a rendered SERP, or you need a specific engine (`--engine baidu`), search directly with the browser_probe tool: `[\"search\", \"<query>\"]` — same browser the chain falls back to.",
-      "Match the channel to the query TYPE, not to the result count: Brave is the default and is solid for English technical queries, while Chinese-language, hot-topic, and community questions are its weak spot — use the `zhihu` CLI or re-call this tool with `chain: [\"browser-probe\"]` there. The chain escalates only when a backend returns nothing, so a full page of SEO mirrors or content-farm pages means the channel is wrong, not that the query needs rephrasing.",
+      "When Brave returns nothing, you want a rendered SERP, or you need a specific engine (`--engine bing`), search directly with the browser_probe tool: `[\"search\", \"<query>\"]` — same browser the chain falls back to.",
+      "Match the channel to the query TYPE, not to the result count: Brave is the default and is solid for English technical queries, while Chinese-language, hot-topic, and community questions are its weak spot — use the `zhihu` CLI or re-call this tool with `chain: [\"browser-probe\"]` there. The chain escalates when a backend returns nothing or only a thin, weakly-matching set (too few results, or none carrying enough query tokens), so a full page of SEO mirrors or content-farm pages means the channel is wrong, not that the query needs rephrasing.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),
