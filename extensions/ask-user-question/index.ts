@@ -95,13 +95,31 @@ const AskUserQuestionParams = Type.Object({
 	),
 });
 
+// Models sometimes escape angle brackets and quotes as HTML entities when they
+// write a display label (observed escaping `<email>` into `&lt;email&gt;`), and the
+// panel renders the label verbatim, so the user sees `&lt;`. Decode before display.
+// `&amp;` goes last so a doubly escaped `&amp;lt;` decodes to `&lt;`, not `<`.
+function decodeEntities(text: string): string {
+	return text
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&#39;/g, "'")
+		.replace(/&#x27;/g, "'")
+		.replace(/&amp;/g, "&");
+}
+
 function normalizeOptions(options: Array<{ label: string; value?: string; description?: string }> | undefined): AskOption[] {
 	return (options || [])
-		.map((option) => ({
-			label: option.label.trim(),
-			value: option.value?.trim() || option.label.trim(),
-			description: option.description?.trim() || undefined,
-		}))
+		.map((option) => {
+			const label = decodeEntities(option.label.trim());
+			return {
+				label,
+				value: option.value?.trim() || label,
+				description: option.description?.trim() || undefined,
+			};
+		})
 		.filter((option) => option.label.length > 0);
 }
 
