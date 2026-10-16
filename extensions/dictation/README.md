@@ -184,7 +184,7 @@ uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 {
   "locale": "zh",
   "keybind": "f8",
-  "keybindMode": "toggle",
+  "keybindMode": "hold",
   "provider": "auto",
   "providers": {
     "local": { "type": "local", "model": "fun-asr-nano", "language": "auto" }
