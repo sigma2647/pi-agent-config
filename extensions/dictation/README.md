@@ -1,11 +1,11 @@
 # pi-dictation — 语音输入（本地模型 / 云端 API）
 
-按 `ctrl+r` 开始说话，说完再按一次，文字就插到光标处。默认优先用**本地模型**（离线、免费、不用密钥）——默认是 `fun-asr-nano`，中文和**小声说话**最准；没有本地模型时自动用云端 API。
+按 `f8` 开始说话，说完再按一次，文字就插到光标处。默认优先用**本地模型**（离线、免费、不用密钥）——默认是 `fun-asr-nano`，中文和**小声说话**最准；没有本地模型时自动用云端 API。
 
 插到已有文字中间时会自动补空格（`hello` + 听写 + `world` 不会粘成 `helloworld`）；中文字之间不加空格。这条只在「说完再出字」（含云端）时生效：流式模型是边说边把字写在光标处，不做补空格。
 
 ```
-ctrl+r          开始 / 结束（默认 hold：按住说话，松手结束）
+f8              开始 / 结束（默认 hold：按住说话，松手结束）
 Enter（录音中）  立刻结束 → 识别 → 直接发送
 Esc（录音中）    取消，不留文字
 /dictation ...   状态、切换服务、下载模型、测麦克风、自检
@@ -34,7 +34,7 @@ Esc（录音中）    取消，不留文字
 想确认自己的终端属于哪种：在**终端里直接**运行
 
 ```bash
-pi-dictation keytest        # 按几次 ctrl+r（含一次按住再松开），它会告诉你是否收到松开事件
+pi-dictation keytest        # 按几次 f8（含一次按住再松开），它会告诉你是否收到松开事件
 ```
 
 ## 组成
@@ -183,7 +183,7 @@ uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 ```json
 {
   "locale": "zh",
-  "keybind": "ctrl+r",
+  "keybind": "f8",
   "keybindMode": "toggle",
   "provider": "auto",
   "providers": {
@@ -211,7 +211,7 @@ uv run scripts/qwen3-asr-server.py --model Qwen/Qwen3-ASR-1.7B
 - `capture.device`：`auto`/空＝默认设备；Linux 用 PulseAudio 源名，macOS 用 `:0`/`:1`，Windows 用设备名或 `default`。
 - `locale`：`zh`（默认）或 `en`。修改 `keybind`/`locale` 后需要 `/reload` 或重启 pi。
 - `keybindMode` 默认 `hold`（按住说话，松手结束）；`toggle` 是按一下开始、再按一下结束。在 pi 里用 `/dictation mode hold|toggle` 切（见上面的按键模式表）。
-- `keybind` 默认 `ctrl+r`（与 pi 内置的「重命名会话」冲突，本扩展优先；想消掉启动提示见下文排查表）。
+- `keybind` 默认 `f8`。`ctrl+r` 留给 prompt-history 的搜索面板（也是 pi 内置的「重命名会话」）；想用 `ctrl+r` 说话就把它设回来，本扩展会在按键到达编辑器之前接住它，启动时不会有冲突提示。
 
 ## 在 pi 里
 
@@ -248,7 +248,7 @@ pi-dictation config
 | `没有可用的语音服务` | `/dictation doctor` 看每一行的原因；下载本地模型或设置云端密钥 |
 | `recording is silent (peak 0)` | 麦克风在给「数字静音」。先跑 `pi-dictation mic`：它会告诉你默认输入是哪个、其它输入有哪些、怎么切。典型原因：无线麦发射端没开、默认设备选错、显示器/声卡的 monitor 源 |
 | 没有反应 | 确认存在 `ffmpeg`/`pw-record`/`arecord`/`sox` 之一：`pi-dictation doctor` |
-| `ctrl+r` 和「重命名会话」冲突 | 已处理：本扩展不再注册 app 级快捷键，而是在按键到达编辑器之前就接住 `ctrl+r`，所以启动时不会再有冲突提示；代价是 `ctrl+r` 不再触发改名（改名仍可在 `/tree`/会话选择器里做） |
+| `ctrl+r` 想用来说话 | 把 `keybind` 设成 `ctrl+r`。本扩展不注册 app 级快捷键，而是在按键到达编辑器之前就接住它，所以启动时不会再有冲突提示；代价是 `ctrl+r` 不再触发改名（改名仍可在 `/tree`/会话选择器里做），并且 prompt-history 的搜索面板会打不开 |
 | 模型下载失败 | 需要网络与 `tar`+`bzip2`；代理走 `HTTPS_PROXY`（`pi-dictation` 由 curl 下载，会读取该变量） |
 | 识别很慢 | 本地模型是单线程 WASM；可切云端服务：`/dictation provider groq` |
 

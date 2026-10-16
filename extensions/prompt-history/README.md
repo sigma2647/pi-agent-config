@@ -70,8 +70,9 @@ fill in as the scan lands.
 
 - Ctrl+R is the default hotkey; `~/.pi/agent/prompt-history.json` moves it, e.g.
   `{"keybind": "f8"}`. Extension raw input runs before the focused editor, so an
-  extension listening for the same key wins silently — dictation claims Ctrl+R by
-  default, and on a default setup this panel would never open. Move one of the two.
+  extension listening for the same key wins silently. dictation used to claim
+  Ctrl+R by default, which left this panel unreachable; its default is f8 now.
+  If you bind either one to the other's key, move one of the two.
 - pi's own Ctrl+R action ("rename session") only exists inside the session picker,
   so the editor-level binding does not fight it.
 - Ctrl+R is caught by the editor wrapper, not `pi.registerShortcut`.

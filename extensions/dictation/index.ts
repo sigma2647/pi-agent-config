@@ -3,7 +3,7 @@
  * Deepgram) dictation into the prompt.
  *
  * Surfaces:
- *   - hotkey (default ctrl+r): start / stop recording
+ *   - hotkey (default f8): start / stop recording
  *   - Enter while recording: stop and send;  Esc: stop recording (keep the text)
  *   - `/dictation ...`: status, provider switch, model download, doctor, test
  *   - `transcribe_audio` tool: transcribe an audio file (used by the agent)

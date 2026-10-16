@@ -90,10 +90,11 @@ export const AUTO_PROVIDER_ORDER = ["local", "openai", "groq", "siliconflow", "g
 
 export const DEFAULT_CONFIG: DictationConfig = {
   locale: "zh",
-  // ctrl+r also means "rename session" in pi; this extension wins the binding
-  // (pi prints an extension-shortcut conflict note). To silence it, add
-  // `"app.session.rename": []` to ~/.pi/agent/keybindings.json.
-  keybind: "ctrl+r",
+  // f8: ctrl+r is taken by prompt-history (and by pi's own "rename session"
+  // inside the session picker), so the dictation default avoids it. Set it back
+  // to ctrl+r only if you do not run prompt-history; this extension consumes the
+  // key before pi does, so a conflict note is not printed either way.
+  keybind: "f8",
   // Default is hold-to-talk: record while the key is held, stop when it comes
   // up. Terminals with key-release events (ghostty/kitty/wezterm) hand the
   // release over directly; everywhere else the extension reads the gap in the

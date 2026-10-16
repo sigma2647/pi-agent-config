@@ -10,8 +10,9 @@
  * extension stores no second copy of your prompts.
  *
  * The hotkey is ctrl+r by default; `~/.pi/agent/prompt-history.json` moves it.
- * Extension raw input runs before the focused editor does, and dictation claims
- * ctrl+r by default, so on a default setup the panel would never open.
+ * Extension raw input runs before the focused editor does, so a second extension
+ * listening on the same key would win silently — dictation used to default to
+ * ctrl+r for exactly that reason; its default is f8 now.
  */
 
 import { readFileSync } from "node:fs";
