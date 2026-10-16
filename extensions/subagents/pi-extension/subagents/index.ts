@@ -252,7 +252,7 @@ const SubagentParams = Type.Object({
   interactive: Type.Optional(
     Type.Boolean({
       description:
-        "Mark as interactive (long-running, user drives its pane). If omitted, falls back to the agent's `interactive` frontmatter.",
+        "Mark as interactive (long-running, user drives its pane; ends only via subagent_done). If omitted, falls back to the agent's `interactive` frontmatter. Without `agent`, a non-fork spawn auto-exits after its final message unless this is true.",
     }),
   ),
   resumeSessionId: Type.Optional(
@@ -638,9 +638,8 @@ function resolveLaunchBehavior(
  *      driven by the user in their own pane (planner, iterate/fork) and
  *      stall pings are noise.
  *
- * When no agent defs exist at all (bare `subagent({ name, task })` call,
- * typical for `/iterate` with `fork: true`), `autoExit` is undefined and the
- * subagent is treated as interactive — matching the intent of iterate.
+ * Bare spawns (no `agent`) follow resolveEffectiveAutoExit: autonomous unless
+ * forked (`/iterate`) or explicitly marked interactive.
  */
 function resolveEffectiveInteractive(
   params: Static<typeof SubagentParams>,
@@ -648,7 +647,25 @@ function resolveEffectiveInteractive(
 ): boolean {
   if (params.interactive != null) return params.interactive;
   if (agentDefs?.interactive != null) return agentDefs.interactive;
-  return !(agentDefs?.autoExit ?? false);
+  return !resolveEffectiveAutoExit(params, agentDefs);
+}
+
+/**
+ * Decide whether the child shuts itself down after its final message.
+ *
+ * Named agents follow their `auto-exit` frontmatter (planner has none, so it
+ * stays open for the user). A bare `subagent({ name, task })` spawn is an
+ * ad-hoc delegated task: it auto-exits unless it is a fork (`/iterate`) or the
+ * caller passed `interactive: true`. Bare spawns used to stay open and wait for
+ * the model to call `subagent_done`, which it often forgot, so the parent hung
+ * until a human typed "done" into the pane.
+ */
+function resolveEffectiveAutoExit(
+  params: Static<typeof SubagentParams>,
+  agentDefs: AgentDefaults | null,
+): boolean {
+  if (agentDefs) return agentDefs.autoExit ?? false;
+  return !params.fork && params.interactive !== true;
 }
 
 function loadAgentDefaults(agentName: string): AgentDefaults | null {
@@ -852,6 +869,10 @@ interface RunningSubagent {
 
 /** All currently running subagents, keyed by id. */
 const runningSubagents = new Map<string, RunningSubagent>();
+// subagent-done.ts runs in the same child process but loads as a separate
+// extension; it reads this to keep an auto-exit child open while its own
+// children are still running. Reassigned on reload so it tracks the live Map.
+(globalThis as any)[Symbol.for("pi-subagents/running-count")] = () => runningSubagents.size;
 
 /**
  * Subagents that already finished in this session, keyed by display name, so a
@@ -1723,6 +1744,7 @@ export const __test__ = {
   discoverAgentDefinitions,
   resolveEffectiveSessionMode,
   resolveLaunchBehavior,
+  resolveEffectiveAutoExit,
   resolveEffectiveInteractive,
   buildSubagentToolAllowlist,
   buildPiPromptArgs,
@@ -1819,6 +1841,7 @@ async function launchSubagent(
   // own default instead of inheriting a possibly-unsupported thinking level.
   const effectiveThinking = resolveEffectiveThinking(effectiveModel, agentDefs, params);
   const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
+  const autoExit = resolveEffectiveAutoExit(params, agentDefs);
 
   const sessionFile = ctx.sessionManager.getSessionFile();
   if (!sessionFile) throw new Error("No session file");
@@ -1867,10 +1890,10 @@ async function launchSubagent(
   // Build the task message
   // Only full-context fork mode inherits prior conversation state.
   // Blank-session modes need the wrapper instructions and artifact-backed handoff.
-  const modeHint = agentDefs?.autoExit
+  const modeHint = autoExit
     ? "Complete your task autonomously."
     : "Complete your task. When finished, call the subagent_done tool. The user can interact with you at any time.";
-  const summaryInstruction = agentDefs?.autoExit
+  const summaryInstruction = autoExit
     ? "Your FINAL assistant message should summarize what you accomplished."
     : "Your FINAL assistant message (before calling subagent_done or before the user exits) should summarize what you accomplished.";
   const nameSlug = slugifyName(params.name, "subagent");
@@ -2020,7 +2043,7 @@ async function launchSubagent(
 
   const toolAllowlist = buildSubagentToolAllowlist(
     effectiveTools,
-    agentDefs?.autoExit === true,
+    autoExit,
   );
   if (toolAllowlist) {
     parts.push("--tools", shellEscape(toolAllowlist));
@@ -2045,7 +2068,7 @@ async function launchSubagent(
   if (params.agent) {
     envParts.push(`PI_SUBAGENT_AGENT=${shellEscape(params.agent)}`);
   }
-  if (agentDefs?.autoExit) {
+  if (autoExit) {
     envParts.push(`PI_SUBAGENT_AUTO_EXIT=1`);
   }
   envParts.push(`PI_SUBAGENT_SESSION=${shellEscape(subagentSessionFile)}`);
@@ -2605,6 +2628,8 @@ async function launchResumeSession(
     autoExit?: boolean;
     /** Agent the session was spawned with, so its deny set is re-applied. */
     agent?: string;
+    /** Appended to the "resumed" tool result. */
+    note?: string;
   },
   ctx: ExtensionContext,
   pi: ExtensionAPI,
@@ -2807,7 +2832,7 @@ async function launchResumeSession(
     });
 
   return {
-    content: [{ type: "text", text: `Session "${name}" resumed.` }],
+    content: [{ type: "text", text: `Session "${name}" resumed.${params.note ?? ""}` }],
     details: {
       id,
       name,
@@ -3389,6 +3414,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
               name: params.name,
               message: params.message,
               agent: finished.agent,
+              // Its earlier run's result may still be queued behind this call;
+              // without this the parent reads that report as the new run dying.
+              note:
+                `\n\nIts previous run had already exited, so this message started a new run of the same session. ` +
+                `A result for the previous run may still arrive — it does not describe this run, which reports separately.`,
             },
             ctx,
             pi,

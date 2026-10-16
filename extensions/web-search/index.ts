@@ -112,18 +112,11 @@ export default function (pi: ExtensionAPI) {
     name: "web_search",
     label: "Web Search",
     description:
-      "Search the web via Brave → browser-probe fallback chain (browser-probe = a real Chrome SERP; call it directly as " +
-      "`browser_probe [\"search\", \"<query>\"]`). " +
-      "Returns ranked URLs with titles and short snippets — NOT full page content. " +
-      "To read a result's full content, call web_fetch on its URL. " +
-      "For site-scoped search (Zhihu/Bilibili/YouTube/WeChat Official Accounts/etc.), prefer the site's dedicated CLI when one is installed; Zhihu has `zhihu search|global|hot`.",
-    promptSnippet: "Search the web with backend fallback",
+      "Search the web. Returns ranked titles, URLs and snippets, not page content; read a page with web_fetch.",
+    promptSnippet: "Search the web; returns titles, URLs and snippets",
     promptGuidelines: [
-      "Use web_search to DISCOVER URLs. Snippets are previews, not answers — follow up with web_fetch on top results to read full pages.",
-      "For structured site search (Bilibili, YouTube, arXiv, etc.), prefer a dedicated site CLI via bash when one is installed (e.g. `zhihu search <query>`); otherwise fall back to web_search or the browser_probe `search` surface.",
-      "For Zhihu content, use the `zhihu` CLI via bash: `zhihu search <query>` (on-site) / `zhihu global <query>` (whole web) / `zhihu hot` (trending). Output is a JSON envelope — parse with `jq`, not `head`/`grep`. It needs no login. Use it instead of a general web_search for Zhihu questions and answers.",
-      "When Brave returns nothing, you want a rendered SERP, or you need a specific engine (`--engine bing`), search directly with the browser_probe tool: `[\"search\", \"<query>\"]` — same browser the chain falls back to.",
-      "Match the channel to the query TYPE, not to the result count: Brave is the default and is solid for English technical queries, while Chinese-language, hot-topic, and community questions are its weak spot — use the `zhihu` CLI or re-call this tool with `chain: [\"browser-probe\"]` there. The chain escalates when a backend returns nothing or only a thin, weakly-matching set (too few results, or none carrying enough query tokens), so a full page of SEO mirrors or content-farm pages means the channel is wrong, not that the query needs rephrasing.",
+      "When web_search snippets answer the question, answer from them. When you need details, web_fetch only the 1–2 most relevant results.",
+      "For Chinese-language, community or hot-topic queries, use `zhihu search <query>` via bash (JSON output; read fields with `jq`), or call web_search with `chain: [\"browser-probe\"]`.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "The search query" }),

@@ -1,7 +1,7 @@
 /**
  * Extension loaded into sub-agents.
  * - Shows agent identity + available tools as a styled widget above the editor (toggle with Ctrl+J)
- * - Auto-exit agents shut down after their final assistant message via agent_end
+ * - Auto-exit agents shut down after their final assistant message once pi settles
  * - Interactive agents get `subagent_done` for explicit completion
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -14,6 +14,21 @@ import { appendAskRequest, askQueuePath, type AskRequest } from "./ask-queue.ts"
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
+}
+
+/**
+ * An Esc that lands while a tool is running can surface as
+ * `stopReason: "error"` with an AbortError text ("This operation was aborted")
+ * instead of `stopReason: "aborted"`. Both mean a human stopped the run, so
+ * both must keep the pane open — reporting it as a failure made the parent
+ * fall back to another model and relaunch while the human was still driving.
+ * Timeout aborts stay errors: nobody is at the keyboard for those.
+ */
+export function isAbortedAssistant(msg: any): boolean {
+  if (msg?.stopReason === "aborted") return true;
+  if (msg?.stopReason !== "error") return false;
+  const text = typeof msg.errorMessage === "string" ? msg.errorMessage : "";
+  return /\babort(ed)?\b/i.test(text) && !/time(d)?\s*out/i.test(text);
 }
 
 export function shouldAutoExitOnAgentEnd(
@@ -32,7 +47,7 @@ export function shouldAutoExitOnAgentEnd(
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg?.role === "assistant") {
-        return msg.stopReason !== "aborted";
+        return !isAbortedAssistant(msg);
       }
     }
   }
@@ -54,10 +69,64 @@ export function shouldAutoExitAfterTurn(opts: {
   waitingForParent: boolean;
   userTookOver: boolean;
   messages: any[] | undefined;
+  runningChildren?: number;
 }): boolean {
   if (!opts.autoExit) return false;
   if (opts.waitingForParent) return false;
+  // A child that spawned its own subagents must outlive them: their results
+  // arrive later as a new turn in this session, and that turn's settle
+  // closes it.
+  if ((opts.runningChildren ?? 0) > 0) return false;
   return shouldAutoExitOnAgentEnd(opts.userTookOver, opts.messages);
+}
+
+/**
+ * An interactive child that failed on its own task (provider error after pi's
+ * retries, no human in the pane) would otherwise sit open forever: nobody is
+ * there to type, and the parent only learns of an exit through `.exit`.
+ * Once a human has taken over, the pane stays theirs.
+ */
+export function shouldExitInteractiveOnError(opts: {
+  autoExit: boolean;
+  waitingForParent: boolean;
+  userTookOver: boolean;
+  messages: any[] | undefined;
+}): boolean {
+  if (opts.autoExit || opts.waitingForParent || opts.userTookOver) return false;
+  return findLatestAssistantError(opts.messages) !== null;
+}
+
+/**
+ * How long an interactive child may sit idle after a clean settle before it
+ * hands its last message to the parent and closes. Covers the model that ends
+ * its turn without calling subagent_done, and the human who walked away from a
+ * pane they took over. PI_SUBAGENT_IDLE_EXIT_MS overrides; 0 disables.
+ */
+export const DEFAULT_IDLE_EXIT_MS = 15 * 60_000;
+
+export function idleExitMs(raw = process.env.PI_SUBAGENT_IDLE_EXIT_MS): number {
+  const value = Number(raw);
+  return raw !== undefined && raw !== "" && Number.isFinite(value) && value >= 0
+    ? value
+    : DEFAULT_IDLE_EXIT_MS;
+}
+
+/**
+ * Arm the idle exit only for an interactive child whose run ended cleanly and
+ * that is not parked on a question. An aborted run (Esc) means a human is
+ * driving, so it stays open with no timer.
+ */
+export function shouldArmIdleExit(opts: {
+  autoExit: boolean;
+  waitingForParent: boolean;
+  messages: any[] | undefined;
+  runningChildren?: number;
+}): boolean {
+  if (opts.autoExit || opts.waitingForParent) return false;
+  // Its own subagents' results start a new run, which re-arms on settle.
+  if ((opts.runningChildren ?? 0) > 0) return false;
+  if (findLatestAssistantError(opts.messages)) return false;
+  return shouldAutoExitOnAgentEnd(false, opts.messages);
 }
 
 /**
@@ -66,7 +135,7 @@ export function shouldAutoExitAfterTurn(opts: {
  *
  * Do NOT add `turn_start` here: a turn is one model request, so the request
  * that produces the message AFTER the ask_question call starts a new turn and
- * would clear the waiting state before agent_end ever sees it. The answer
+ * would clear the waiting state before the run settles. The answer
  * arriving is signalled by the `input` event instead.
  */
 export function shouldClearWaitingOnToolStart(toolName: string): boolean {
@@ -124,7 +193,7 @@ export function findLatestAssistantError(
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg?.role !== "assistant") continue;
-    if (msg.stopReason !== "error") return null;
+    if (msg.stopReason !== "error" || isAbortedAssistant(msg)) return null;
     const raw = typeof msg.errorMessage === "string" ? msg.errorMessage.trim() : "";
     return {
       errorMessage: raw || "Subagent agent loop ended with stopReason=error (no errorMessage field).",
@@ -132,6 +201,12 @@ export function findLatestAssistantError(
     };
   }
   return null;
+}
+
+/** Subagents this process launched that have not finished (see index.ts). */
+function runningChildCount(): number {
+  const read = (globalThis as any)[Symbol.for("pi-subagents/running-count")];
+  return typeof read === "function" ? read() : 0;
 }
 
 export function parseDeniedTools(rawValue: string | undefined): string[] {
@@ -222,7 +297,14 @@ export default function (pi: ExtensionAPI) {
     renderWidget(ctx, null);
   });
 
+  let idleExitTimer: ReturnType<typeof setTimeout> | null = null;
+  function cancelIdleExit() {
+    if (idleExitTimer) clearTimeout(idleExitTimer);
+    idleExitTimer = null;
+  }
+
   pi.on("input", () => {
+    cancelIdleExit();
     recorder.input();
     // A user message arrived in this session. The only way that can happen
     // while parked is the parent answering (or a human typing), so the wait is
@@ -240,45 +322,69 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", () => {
+    cancelIdleExit();
     agentStarted = true;
     recorder.agentStart();
   });
 
-  pi.on("agent_end", (event, ctx) => {
-    const messages = (event as any).messages as any[] | undefined;
-    const shouldExit = shouldAutoExitAfterTurn({
-      autoExit,
-      waitingForParent,
-      userTookOver,
-      messages,
-    });
+  // agent_end is not terminal: pi decides on auto-retry and auto-compaction
+  // only after extensions see it, and the event carries no willRetry. Exiting
+  // here reported a transient 429 to the parent as a failure while the child
+  // went on retrying. Hold the messages and decide on agent_settled, which
+  // fires once the run is truly idle.
+  let latestMessages: any[] | undefined;
+
+  // Always notify the parent via the .exit sidecar before shutdown so normal
+  // completion does not depend on backend-specific terminal capture. Preserve
+  // stopReason: "error" details for a clear failure report.
+  function exitWithSidecar(messages: any[] | undefined, ctx: { shutdown(): void }) {
+    const errorInfo = findLatestAssistantError(messages);
+    const sessionFile = process.env.PI_SUBAGENT_SESSION;
+    if (sessionFile) {
+      try {
+        writeFileSync(
+          `${sessionFile}.exit`,
+          JSON.stringify(errorInfo
+            ? {
+                type: "error",
+                errorMessage: errorInfo.errorMessage,
+                stopReason: errorInfo.stopReason,
+              }
+            : { type: "done" }),
+        );
+      } catch {
+        // Best effort — the watcher can still fall back to the terminal sentinel.
+      }
+    }
+    recorder.agentEndDone();
+    ctx.shutdown();
+  }
+  pi.on("agent_end", (event) => {
+    latestMessages = (event as any).messages as any[] | undefined;
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    const messages = latestMessages;
+    const turn = { autoExit, waitingForParent, userTookOver, messages };
+    const shouldExit =
+      shouldAutoExitAfterTurn({ ...turn, runningChildren: runningChildCount() }) ||
+      shouldExitInteractiveOnError(turn);
 
     if (shouldExit) {
-      // Always notify the parent via the .exit sidecar before shutdown so
-      // normal completion does not depend on backend-specific terminal capture.
-      // Preserve stopReason: "error" details for a clear failure report.
-      const errorInfo = findLatestAssistantError(messages);
-      const sessionFile = process.env.PI_SUBAGENT_SESSION;
-      if (sessionFile) {
-        try {
-          writeFileSync(
-            `${sessionFile}.exit`,
-            JSON.stringify(errorInfo
-              ? {
-                  type: "error",
-                  errorMessage: errorInfo.errorMessage,
-                  stopReason: errorInfo.stopReason,
-                }
-              : { type: "done" }),
-          );
-        } catch {
-          // Best effort — the watcher can still fall back to the terminal sentinel.
-        }
-      }
-
-      recorder.agentEndDone();
-      ctx.shutdown();
+      exitWithSidecar(messages, ctx);
       return;
+    }
+
+    cancelIdleExit();
+    const idleMs = idleExitMs();
+    const idleArgs = () => ({ autoExit, waitingForParent, messages, runningChildren: runningChildCount() });
+    if (idleMs > 0 && shouldArmIdleExit(idleArgs())) {
+      idleExitTimer = setTimeout(() => {
+        idleExitTimer = null;
+        // Re-check: a question or a nested spawn may have landed meanwhile.
+        if (shouldArmIdleExit(idleArgs())) exitWithSidecar(messages, ctx);
+      }, idleMs);
+      idleExitTimer.unref?.();
     }
 
     recorder.agentEndWaiting();
@@ -332,6 +438,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (event) => {
+    cancelIdleExit();
     recorder.sessionShutdown((event as any).reason);
   });
 
@@ -398,7 +505,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // Auto-exit agents already shut down in agent_end, after the model's final
+  // Auto-exit agents already shut down on agent_settled, after the model's final
   // assistant message is complete. Exposing subagent_done lets the model call
   // it one turn too early and return a planning sentence instead of its report.
   if (!autoExit) {

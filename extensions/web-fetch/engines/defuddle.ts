@@ -7,7 +7,7 @@
 
 import { parseHTML } from "linkedom";
 import type { FetchContext, FetchResult } from "../core.ts";
-import { BROWSER_HEADERS } from "../core.ts";
+import { BROWSER_HEADERS, looksLikeBotWall } from "../core.ts";
 
 type DefuddleFn = (
 	input: any, // Document | string
@@ -59,6 +59,11 @@ export async function extractWithDefuddle(
 			html = await res.text();
 		}
 		if (ctx.signal?.aborted) return null;
+
+		// Same wall guard as readability: Fastly/Cloudflare interstitials are
+		// long enough to pass the length check, so length alone would let one
+		// through as the final answer.
+		if (looksLikeBotWall(html)) return null;
 
 		const { document } = parseHTML(html);
 

@@ -7,7 +7,8 @@ import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
 import type { FetchContext, FetchResult } from "../core.ts";
-import { BROWSER_HEADERS, MIN_USEFUL_CONTENT } from "../core.ts";
+import { BROWSER_HEADERS, MIN_USEFUL_CONTENT, looksLikeBotWall } from "../core.ts";
+import { cookieHeaderFor } from "../cookies.ts";
 import { isPDF, extractPDF, MAX_PDF_SIZE } from "./pdf.ts";
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -350,9 +351,47 @@ function describeNetworkError(err: unknown, ctx: FetchContext): string {
 
 // ── Main HTTP Extraction ────────────────────────────────────────────────
 
-export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
-	// Alias for readability — body still talks about `url` / `signal` which
-	// keeps the original logic clean. Only the signature changed.
+/** One HTTP attempt's outcome: HTML for the static extractors to parse, or a
+ *  finished result when there is nothing left to parse (non-HTML body, PDF) or
+ *  when the attempt ended in an error. core.ts fetches once and hands the same
+ *  HTML to both static extractors — defuddle and readability are two readings
+ *  of one document, not two chances at the network. */
+/** Static-fetch failure reasons the fallback chain routes on (core.ts). */
+export const BOT_WALL_ERROR = "Anti-bot interstitial page (not the requested content)";
+export const JS_RENDERED_ERROR = "Page appears to be JavaScript-rendered (content loads dynamically)";
+
+export type FetchedDocument = { html: string } | { result: FetchResult };
+
+export async function fetchDocument(ctx: FetchContext): Promise<FetchedDocument> {
+	// Anonymous first. Reading the live cookie jar costs two subprocess round
+	// trips (~250ms), so pay for it only when the origin answers as if we were
+	// not signed in — 401/403, or a 200 that is really a login/interstitial
+	// page. One retry, never a loop.
+	let attempt = await attemptFetch(ctx, "");
+	if (attempt.kind === "document") return attempt.doc;
+
+	const cookie = await cookieHeaderFor(ctx.url, ctx.cookiesPath);
+	if (!cookie) {
+		return { result: { url: ctx.url, title: "", content: "", error: attempt.reason } };
+	}
+	if (process.env.PI_WF_DEBUG === "1") {
+		process.stderr.write(`[pi-wf] ${attempt.reason} — retrying with browser cookies\n`);
+	}
+	attempt = await attemptFetch(ctx, cookie);
+	return attempt.kind === "document"
+		? attempt.doc
+		: { result: { url: ctx.url, title: "", content: "", error: attempt.reason } };
+}
+
+/** One HTTP attempt's outcome: a finished document, or the origin telling us it
+ *  would answer differently to a signed-in request. */
+type Attempt =
+	| { kind: "document"; doc: FetchedDocument }
+	| { kind: "needs-session"; reason: string };
+
+async function attemptFetch(ctx: FetchContext, cookie: string): Promise<Attempt> {
+	// Body still talks about `url` / `signal` which keeps the logic clean; only
+	// the signature goes through the shared ctx.
 	const { url, signal } = ctx;
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -363,13 +402,25 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 		const response = await fetch(url, {
 			signal: controller.signal,
 			dispatcher: ctx.dispatcher,
-			headers: BROWSER_HEADERS,
+			headers: cookie ? { ...BROWSER_HEADERS, Cookie: cookie } : BROWSER_HEADERS,
 		});
 
 		if (!response.ok) {
+			const reason = `HTTP ${response.status}: ${response.statusText}`;
+			// 401/403 are the shapes a session cookie fixes. Other statuses (4xx,
+			// 5xx) mean the answer would not change, so they stay final.
+			if (response.status === 401 || response.status === 403) {
+				await response.body?.cancel().catch(() => {});
+				return { kind: "needs-session", reason };
+			}
 			return {
-				url, title: "", content: "",
-				error: `HTTP ${response.status}: ${response.statusText}`,
+				kind: "document",
+				doc: {
+					result: {
+						url, title: "", content: "",
+						error: reason,
+					},
+				},
 			};
 		}
 
@@ -382,15 +433,20 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 			const contentLength = parseInt(contentLengthHeader, 10);
 			if (contentLength > maxSize) {
 				return {
-					url, title: "", content: "",
-					error: `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
+					kind: "document",
+					doc: {
+						result: {
+							url, title: "", content: "",
+							error: `Response too large (${Math.round(contentLength / 1024 / 1024)}MB)`,
+						},
+					},
 				};
 			}
 		}
 
 		if (isPDFContent) {
 			const buffer = await response.arrayBuffer();
-			return await extractPDF(buffer, url);
+			return { kind: "document", doc: { result: await extractPDF(buffer, url) } };
 		}
 
 		if (
@@ -401,8 +457,13 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 			contentType.includes("application/zip")
 		) {
 			return {
-				url, title: "", content: "",
-				error: `Unsupported content type: ${contentType.split(";")[0]}`,
+				kind: "document",
+				doc: {
+					result: {
+						url, title: "", content: "",
+						error: `Unsupported content type: ${contentType.split(";")[0]}`,
+					},
+				},
 			};
 		}
 
@@ -411,20 +472,52 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 			contentType.includes("text/html") ||
 			contentType.includes("application/xhtml+xml");
 
+		// An anti-bot interstitial is HTTP 200 with real page chrome but no
+		// content, and a JS-only shell is the same shape from here (real HTML,
+		// nothing in the body). Both are sometimes fixed by cookies — a challenge
+		// cookie is exactly what a wall wants, and a signed-in origin often serves
+		// the content server-side. Report "needs-session" and let fetchDocument
+		// retry once before the chain falls through to the browser.
+		if (isHTML && (looksLikeBotWall(text) || isLikelyJSRendered(text))) {
+			return {
+				kind: "needs-session",
+				reason: looksLikeBotWall(text)
+					? BOT_WALL_ERROR
+					: JS_RENDERED_ERROR,
+			};
+		}
+
 		if (!isHTML) {
 			const title =
 				extractHeadingTitle(text) ??
 				new URL(url).pathname.split("/").pop() ??
 				url;
-			return { url, title, content: text, error: null };
+			return { kind: "document", doc: { result: { url, title, content: text, error: null } } };
 		}
 
-		const { document } = parseHTML(text);
+		return { kind: "document", doc: { html: text } };
+	} catch (err) {
+		return {
+			kind: "document",
+			doc: { result: { url, title: "", content: "", error: describeNetworkError(err, ctx) } },
+		};
+	} finally {
+		clearTimeout(timeoutId);
+		signal?.removeEventListener("abort", onAbort);
+	}
+}
+
+/** Parse an already-fetched HTML document with Readability. Takes the HTML
+ *  rather than fetching it so one download can feed several extractors. */
+export async function extractHtml(ctx: FetchContext, html: string): Promise<FetchResult> {
+	const { url } = ctx;
+	try {
+		const { document } = parseHTML(html);
 		const reader = new Readability(document as unknown as Document);
 		const article = reader.parse();
 
 		if (!article) {
-			const rscResult = extractRSCContent(text);
+			const rscResult = extractRSCContent(html);
 			if (rscResult) {
 				return {
 					url,
@@ -434,11 +527,11 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 				};
 			}
 
-			const jsRendered = isLikelyJSRendered(text);
+			const jsRendered = isLikelyJSRendered(html);
 			return {
 				url, title: "", content: "",
 				error: jsRendered
-					? "Page appears to be JavaScript-rendered (content loads dynamically)"
+					? JS_RENDERED_ERROR
 					: "Could not extract readable content from HTML structure",
 			};
 		}
@@ -450,8 +543,8 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 				url,
 				title: article.title || "",
 				content: markdown,
-				error: isLikelyJSRendered(text)
-					? "Page appears to be JavaScript-rendered (content loads dynamically)"
+				error: isLikelyJSRendered(html)
+					? JS_RENDERED_ERROR
 					: "Extracted content appears incomplete",
 			};
 		}
@@ -464,8 +557,13 @@ export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
 		};
 	} catch (err) {
 		return { url, title: "", content: "", error: describeNetworkError(err, ctx) };
-	} finally {
-		clearTimeout(timeoutId);
-		signal?.removeEventListener("abort", onAbort);
 	}
+}
+
+/** Fetch and parse in one call. Kept for callers that want the whole static
+ *  step; the fallback chain in core.ts uses the two halves separately so the
+ *  HTML is fetched once. */
+export async function extractViaHttp(ctx: FetchContext): Promise<FetchResult> {
+	const doc = await fetchDocument(ctx);
+	return "result" in doc ? doc.result : extractHtml(ctx, doc.html);
 }

@@ -1,5 +1,37 @@
 # web-fetch 扩展踩坑记录
 
+## 2026-10-14：pypi 返回 Fastly 拦截页 + 13 秒 + 重复抓取 + 静态路径没有 cookie
+
+### 症状
+
+`pi-wf https://pypi.org/project/zpl` 返回 Fastly 的「Oops, something went wrong」页面当正文；同一条命令慢到 13 秒；`browser-probe read` 同一个 URL 又快又对。
+
+### 根因（四个独立缺陷）
+
+1. **拦截页被当成正文返回。** Readability 靠长度阈值挡住了拦截页，但 `engines/jina.ts` 只检查 `<100` 字和两个固定开头，Fastly 那张约 350 字的页全过。r.jina.ai 是机房 IP，撞墙概率比本机浏览器高，于是链子在 jina 这一步「成功」返回，永远到不了 browser-probe。
+   **修法**：`core.ts` 抽出 `looksLikeBotWall()`（唯一一份标记表，原先只藏在 `browser-probe.ts` 的内联正则里），readability / defuddle / jina / browser-probe 四处共用；命中就当没有结果，往下走。
+2. **连接超时默认 10 秒。** 本机代理 7890 会「接受连接但上游卡死」，undici 默认 10 秒才放弃。
+   **修法**：`core.ts` 把连接限时压到 3 秒，**必须写成 `proxyTls`/`requestTls` 里的 `timeout`** —— `connectTimeout` 顶层参数根本不进 ProxyAgent 的 connector（实测仍是 10.5 秒）。
+3. **同一个 URL 抓两次。** defuddle-primary 和 readability 各自 fetch 一次，代理卡住时这 3 秒付两遍。
+   **修法**：`readability.ts` 拆成 `fetchDocument()`（只管抓 + content-type / PDF / 拦截页判定）与 `extractHtml()`（只管解析给定 HTML）；`core.ts` 抓一次，两个提取器读同一份 HTML。非 HTML 正文和 PDF 直接返回。
+4. **静态路径完全不发 cookie。** 登录态只活在 Playwright profile 里，只有走到浏览器才用得上，于是「只需要一个会话 cookie」的页面也要付一次浏览器启动。
+   **修法**：新增 `cookies.ts` —— 从**在跑的** browser-probe 活读（`daemon status --json` 门控，daemon 不在就不读、绝不因此启动 Chrome；再 `cookies get --json`），按域名/路径/secure/过期匹配。**不写任何文件**；`--cookies <file>` / `PI_WF_COOKIES` 只作为显式快照覆盖（测试/离线用）。进程内 30 秒缓存。
+   **按需读（不在每次抓取付钱）**：`fetchDocument` 先匿名抓一次；只有出现「像是没登录」的信号才读 cookie 并重试**一次**（不循环）——HTTP 401/403、或 200 但正文是拦截页 / JS 空壳（判定复用 `looksLikeBotWall` 与 `isLikelyJSRendered`）。正常页零额外开销（实测 0.19s vs 常读方案 0.45s）；失败路径多两次子进程（~250ms）+ 一次请求。
+
+### 实测（2026-10-14，本机代理间歇性卡死）
+
+- pypi：修前 13s 且内容错；修后 4.2–4.9s（代理卡死那次 3.5s 是连接超时上限）+ 内容正确。
+- cookie 机制：本地强制登录的测试站，无 jar 拿到登录短页、带 jar 直接拿到正文（`cookies: 1 matched`，显式文件）；活读路径：daemon 在跑时 `read 159 live in ~240ms`，`17 matched for www.google.com`。
+- 真实收益一处：Google SERP 匿名抓是「JS-rendered」→ 走 jina 3.8s；带 jar 后 0.7s 静态出结果。zhihu 带 cookie 仍 403（它要的不只是 cookie），未受益。
+
+### 待办
+
+- 域名提取器（github/reddit/…）自己发 HTTP，**不读 cookie jar**；要覆盖得逐个改。
+- browser-probe 的 `cookies get --domain <host>` 会**少给** cookie（CDP 给 URL 过滤器时走 `Network.getCookies`，实测 www.google.com 只回 1 个而 profile 里有 17 个）。所以 pi-wf 不带过滤器读全量，自己过滤。
+- daemon 不在时不做活读（会启动 Chrome）；也没有「失败后自动重试带 cookie」的路径。
+
+---
+
 ## 症状
 
 `pi-wf <url>` 终端能拿到内容，但 pi agent 调用 `web_fetch` 工具返回 HTTP 5xx 或空，报错提示 "Page may be JavaScript-rendered or login-gated"（完全误导）。

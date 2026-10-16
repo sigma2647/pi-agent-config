@@ -35,7 +35,7 @@ const DEFAULTS = {
 	/** 距上次生成累计新增多少 token 后刷新标题。 */
 	refreshTokens: 20_000,
 	/** 标题字数上限（中文按字算）。 */
-	maxChars: 6,
+	maxChars: 8,
 	/** 喂给模型的对话摘录长度上限（字符）。 */
 	excerptChars: 6_000,
 };
@@ -147,8 +147,8 @@ function excerpt(ctx: ExtensionContext, limit: number): string {
 	return `${head}\n\n……（中间省略）……\n\n${tail}`;
 }
 
-/** 去掉引号、句末标点、markdown 记号，并按「字」截断（不切坏代理对）。 */
-function normalize(raw: string, maxChars: number): string | undefined {
+/** 去掉引号、句末标点、markdown 记号。 */
+function cleanTitle(raw: string): string | undefined {
 	const cleaned = raw
 		.split("\n")[0]
 		.replace(/[`*_#>]/g, "")
@@ -156,24 +156,31 @@ function normalize(raw: string, maxChars: number): string | undefined {
 		.replace(/[\s」』“”"'《》【】\])]+$/, "")
 		.replace(/[。.，,、；;：:！!？?~～-]+$/, "")
 		.trim();
-	if (!cleaned) return undefined;
-	return Array.from(cleaned).slice(0, maxChars).join("");
+	return cleaned || undefined;
 }
 
-/** 生成标题用的系统提示。第二次尝试时明说上一次混了英文。 */
-function titlePrompt(cfg: Config, attempt: number): string {
-	const base =
-		`你给编程对话起标题。用纯中文名词短语概括这段对话在做什么，最多 ${cfg.maxChars} 个字。` +
-		"只输出标题本身：不要引号、不要句末标点、不要解释。" +
-		"去掉「两种」「关于」「的区别」「的讨论」这类可有可无的修饰，只留核心词，越短越好。" +
-		"标题里绝对不能出现英文字母、英文单词、函数名或缩写；即使对话里全是英文术语，也要换成中文说法。" +
-		"例如「批量等待容错」。";
-	return attempt === 1
-		? base
-		: `${base}上一次的标题里混进了英文，这次必须全部用中文表达。`;
+/** 标题不合格的原因，合格返回 undefined。 */
+function problemOf(title: string, cfg: Config): string | undefined {
+	if (/[A-Za-z]/.test(title)) return "混进了英文字母，换成中文说法";
+	const chars = Array.from(title).length;
+	if (chars > cfg.maxChars) {
+		return `${chars} 个字，超过上限 ${cfg.maxChars}，删掉次要的词`;
+	}
+	return undefined;
 }
 
-/** 用当前会话模型生成标题，最多试两次（第二次针对英文残留）。失败都返回 undefined。 */
+function titlePrompt(cfg: Config): string {
+	return [
+		"给一段编程对话写标题。标题显示在终端 tab 上，让人一眼认出这个会话在干什么。",
+		`它是一句极短的任务简报：动词加对象，只说当前的主要目标，不超过 ${cfg.maxChars} 个字。`,
+		"不写过程、结论、进展，不加修饰词。",
+		"只用中文，英文术语换成中文说法。",
+		"只输出标题本身，不加引号、标点或解释。",
+		"例：修复标题截断、加听写热键、排查搜索超时。",
+	].join("\n");
+}
+
+/** 用当前会话模型生成标题；不合格就带上原因重试一次，仍不合格返回 undefined。 */
 async function generateTitle(
 	ctx: ExtensionContext,
 	cfg: Config,
@@ -190,29 +197,27 @@ async function generateTitle(
 		return undefined;
 	}
 
-	const messages = [
-		{
-			role: "user" as const,
-			content: `对话记录：\n\n${transcript}`,
-			timestamp: Date.now(),
-		},
-	];
-
+	let feedback = "";
 	for (let attempt = 1; attempt <= 2; attempt += 1) {
 		const reply = await ctx.modelRegistry.complete(model, {
-			systemPrompt: titlePrompt(cfg, attempt),
-			messages,
+			systemPrompt: titlePrompt(cfg),
+			messages: [
+				{
+					role: "user" as const,
+					content: `对话记录：\n\n${transcript}${feedback}`,
+					timestamp: Date.now(),
+				},
+			],
 		});
-		const name = normalize(textOf(reply.content), cfg.maxChars);
-		if (!name) {
-			debug(`第 ${attempt} 次尝试没得到可用标题`);
+		const title = cleanTitle(textOf(reply.content));
+		if (!title) {
+			debug(`第 ${attempt} 次没得到可用标题`);
 			continue;
 		}
-		if (/[A-Za-z]/.test(name)) {
-			debug(`第 ${attempt} 次尝试含英文字母（${name}），重试`);
-			continue;
-		}
-		return name;
+		const problem = problemOf(title, cfg);
+		if (!problem) return title;
+		debug(`第 ${attempt} 次不合格（${title}）：${problem}`);
+		feedback = `\n\n上次你写的标题「${title}」不合格：${problem}。重写。`;
 	}
 
 	return undefined;

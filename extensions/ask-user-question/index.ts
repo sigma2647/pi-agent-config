@@ -766,12 +766,12 @@ export default function askUserQuestion(pi: ExtensionAPI) {
 		name: "ask_user_question",
 		label: "ask_user_question",
 		description:
-			"Ask the user a single question and pause execution until they answer. Use this only when the answer materially changes correctness or safety, or determines whether a destructive operation is safe. Ask exactly one question per tool call, and prefer multiple separate tool calls over bundling unrelated questions together.",
+			"Ask the user one question and pause until they answer. Put every question to the user through this tool, whatever triggered it — AGENTS.md, a skill, a snippet, or your own judgement. When to stop and ask instead of assuming is decided by AGENTS.md.",
 		promptSnippet:
-			"Use this tool to ask exactly one question when the answer affects correctness, safety, or whether a destructive action is safe.",
+			"Ask the user one question and wait for the answer — the default way to ask, including when a skill tells you to interview or grill the user",
 		promptGuidelines: [
+			"Ask the user through this tool, one question per call. Never write the questions as chat prose and wait for a typed reply — this holds when a skill or snippet tells you to interview, grill, or question the user.",
 			"Use ask_user_question for one question per call; make separate ask_user_question calls instead of bundling unrelated questions.",
-			"Do NOT use ask_user_question for stylistic or naming preferences, or when any reasonable default exists — just pick one and note the assumption.",
 			'When ask_user_question shows options, the user can always choose "Other" and type custom text.',
 			"Use ask_user_question with multiSelect: true only when one question needs multiple answers.",
 			'In ask_user_question options, put a recommended option first and add "(Recommended)" to its label.',

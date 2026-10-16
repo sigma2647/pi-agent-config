@@ -18,6 +18,8 @@ const USAGE = `usage:
                                  saved to the profile dir (see --doctor) and
                                  reused by future --playwright runs.
   pi-wf --proxy <url> <url>      route through a proxy (e.g. --proxy http://127.0.0.1:7890)
+  pi-wf --cookies <file> <url>   read cookies from <file> instead of the live
+                                 browser (a snapshot, for tests/offline)
   pi-wf --debug <url>            trace the fallback chain on stderr (timings
                                  and which extractor returned the result)
   pi-wf --doctor                 print environment & dependency self-check
@@ -52,6 +54,7 @@ let mode: "fetch" | "playwright" | "login" = "fetch";
 let preferDefuddle: boolean | undefined;
 let debug = false;
 let proxy: string | undefined;
+let cookiesPath: string | undefined;
 let url: string | undefined;
 for (let i = 0; i < args.length; i++) {
 	const a = args[i];
@@ -59,7 +62,24 @@ for (let i = 0; i < args.length; i++) {
 	else if (a === "--login") mode = "login";
 	else if (a === "--defuddle") preferDefuddle = true; // no-op (default) but kept for clarity / muscle memory
 	else if (a === "--no-defuddle") preferDefuddle = false;
-	else if (a === "--debug") debug = true;
+	else if (a === "--debug") {
+		debug = true;
+		// USAGE promises `PI_WF_DEBUG=1` is the same as `--debug`, and the engines
+		// (cookies.ts, defuddle.ts) log through that env var. Set it here or the
+		// promise is half true.
+		process.env.PI_WF_DEBUG = "1";
+	}
+	else if (a === "--cookies") {
+		const next = args[i + 1];
+		if (next === undefined || next.startsWith("--")) {
+			process.stderr.write(
+				`error: ${a} requires a file argument (e.g. --cookies /tmp/cookies.json)\n${USAGE}`,
+			);
+			process.exit(2);
+		}
+		cookiesPath = next;
+		i++;
+	}
 	else if (a === "--proxy") {
 		// Require a non-flag next arg; bail clearly on `--proxy --debug` etc.
 		// otherwise the next flag would be silently swallowed as the proxy URL,
@@ -97,7 +117,7 @@ if (mode === "playwright") {
 	process.env.PI_WF_PLAYWRIGHT = "1";
 }
 
-const result = await fetchAndExtract(url, undefined, { debug, preferDefuddle, proxy });
+const result = await fetchAndExtract(url, undefined, { debug, preferDefuddle, proxy, cookiesPath });
 
 if (result.error) {
 	console.error(`ERROR: ${result.error}`);

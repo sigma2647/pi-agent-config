@@ -26,6 +26,7 @@ Personal extensions for `@earendil-works/pi-coding-agent`.
 ```text
 agent/agents/                 personal Git-managed agent definitions
 extensions/install.sh          unified CLI installer
+extensions/model-prompt/       per-model system prompt sections (standalone plugin, install separately)
 extensions/web-fetch/          single URL fetch/extract (pi-wf)
 extensions/web-search/         brave → browser-probe search (pi-ws)
 extensions/subagents/          async mux-backed subagent package

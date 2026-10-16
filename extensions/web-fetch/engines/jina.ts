@@ -5,6 +5,7 @@
 // handle but don't warrant a full headless browser.
 
 import type { FetchContext, FetchResult } from "../core.ts";
+import { looksLikeBotWall } from "../core.ts";
 import { extractHeadingTitle } from "./readability.ts";
 
 const JINA_READER_BASE = "https://r.jina.ai/";
@@ -32,7 +33,11 @@ export async function extractWithJinaReader(
 		if (
 			markdownPart.length < 100 ||
 			markdownPart.startsWith("Loading...") ||
-			markdownPart.startsWith("Please enable JavaScript")
+			markdownPart.startsWith("Please enable JavaScript") ||
+			// Jina's egress is a datacenter IP, so it meets walls more often than a
+			// local browser does. Returning the wall here hands the chain a false
+			// success; return null so browser-probe gets its turn.
+			looksLikeBotWall(markdownPart)
 		) {
 			return null;
 		}

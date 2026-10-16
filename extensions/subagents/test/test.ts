@@ -985,11 +985,28 @@ describe("subagent discovery", () => {
       testApi.resolveEffectiveInteractive({ name: "A", task: "T" }, {}),
       true,
     );
-    // Bare spawn with no agent defs (e.g. /iterate fork) is interactive by default.
+    // Bare spawn with no agent defs is an autonomous ad-hoc task...
     assert.equal(
       testApi.resolveEffectiveInteractive({ name: "A", task: "T" }, null),
+      false,
+    );
+    // ...but a bare fork (/iterate) stays interactive.
+    assert.equal(
+      testApi.resolveEffectiveInteractive({ name: "A", task: "T", fork: true }, null),
       true,
     );
+  });
+
+  it("resolveEffectiveAutoExit: bare spawns auto-exit, named agents follow frontmatter", () => {
+    const r = testApi.resolveEffectiveAutoExit;
+    assert.equal(r({ name: "A", task: "T" }, null), true);
+    assert.equal(r({ name: "A", task: "T", fork: true }, null), false);
+    assert.equal(r({ name: "A", task: "T", interactive: true }, null), false);
+    assert.equal(r({ name: "A", task: "T", interactive: false }, null), true);
+    assert.equal(r({ name: "A", task: "T" }, { autoExit: true }), true);
+    // planner: no auto-exit frontmatter → stays open for the user.
+    assert.equal(r({ name: "A", task: "T" }, {}), false);
+    assert.equal(r({ name: "A", task: "T" }, { autoExit: false }), false);
   });
 
   it("resolveEffectiveInteractive honors explicit frontmatter over the auto-exit default", () => {
@@ -1569,10 +1586,11 @@ describe("subagent-done.ts", () => {
           registerTool() {},
         } as any);
 
-        handlers.get("agent_end")!(
-          { messages: [{ role: "assistant", stopReason: "stop" }] },
-          { shutdown: () => { shutdown = true; } },
-        );
+        const ctx = { shutdown: () => { shutdown = true; } };
+        handlers.get("agent_end")!({ messages: [{ role: "assistant", stopReason: "stop" }] });
+        // agent_end alone is not terminal: pi may still retry or compact.
+        assert.equal(shutdown, false);
+        handlers.get("agent_settled")!({ aborted: false }, ctx);
 
         assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
         assert.equal(shutdown, true);
@@ -1617,6 +1635,18 @@ describe("subagent-done.ts", () => {
       // failure detail; staying open would just strand the worker.
       const messages = [{ role: "assistant", stopReason: "error", errorMessage: "529 overloaded" }];
       assert.equal(shouldAutoExitOnAgentEnd(false, messages), true);
+    });
+
+    it("stays open when Escape surfaces as an AbortError with stopReason=error", () => {
+      const messages = [{ role: "assistant", stopReason: "error", errorMessage: "This operation was aborted" }];
+      assert.equal(shouldAutoExitOnAgentEnd(false, messages), false);
+      assert.equal(findLatestAssistantError(messages), null);
+    });
+
+    it("still treats a timeout abort as an error", () => {
+      const messages = [{ role: "assistant", stopReason: "error", errorMessage: "The operation was aborted due to timeout" }];
+      assert.equal(shouldAutoExitOnAgentEnd(false, messages), true);
+      assert.notEqual(findLatestAssistantError(messages), null);
     });
   });
 

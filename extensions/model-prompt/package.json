@@ -1,0 +1,14 @@
+{
+	"name": "pi-model-prompt",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Per-model system prompt sections for pi — give each model its own <model_guidance> block",
+	"keywords": ["pi-package"],
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

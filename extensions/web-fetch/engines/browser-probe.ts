@@ -21,7 +21,7 @@ import { promisify } from "node:util";
 import { parseHTML } from "linkedom";
 import { Readability } from "@mozilla/readability";
 import type { FetchContext, FetchResult } from "../core.ts";
-import { MIN_USEFUL_CONTENT } from "../core.ts";
+import { MIN_USEFUL_CONTENT, looksLikeBotWall } from "../core.ts";
 import { htmlToMarkdown } from "./readability.ts";
 import { extractWithDefuddle } from "./defuddle.ts";
 import { which } from "../../_common/tools/cli-helpers.ts";
@@ -143,12 +143,8 @@ export async function extractWithBrowserProbe(
 
 	if (!html || html.length < 200) return null;
 
-	// Bail on anti-bot walls and login gates
-	if (
-		/安全验证|请您登录|please log\s*in|captcha required|Access Denied|Just a moment/i.test(
-			html.slice(0, 3000),
-		)
-	) {
+	// Bail on anti-bot walls and login gates (shared marker list — see core.ts)
+	if (looksLikeBotWall(html)) {
 		return null;
 	}
 

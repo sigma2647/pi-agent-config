@@ -28,15 +28,38 @@ Two boundaries that are easy to get wrong:
 
 ## Fallback chains (three real ones)
 
-**1. web-fetch** (`extensions/web-fetch/core.ts`) — domain extractor → Defuddle
-(default primary) → Readability (single `undici` HTTP) → Jina → Browser Probe →
-Playwright. One branch descends to the browser early: a local-egress `fetch
-failed` (`core.ts:206`) skips Jina and tries the browser directly. The other
-browser call (`core.ts:237`) is the chain's normal Browser Probe slot, reached
-only after Jina returns null. Opt out of Defuddle with `--no-defuddle` or
-`PI_WF_PREFER_DEFUDDLE=0`. Domain extractors (5): bilibili, github, hackernews,
-reddit, wechat (`mp.weixin.qq.com/s/`). There is no zhihu extractor — zhihu goes
-through the bash `zhihu` CLI.
+**1. web-fetch** (`extensions/web-fetch/core.ts`) — domain extractor → one HTTP
+fetch (`fetchDocument`, `readability.ts:365`) → Defuddle (default primary) →
+Readability → Jina → Browser Probe → Playwright. Defuddle and Readability both
+parse that one fetch's HTML (`extractHtml`, `readability.ts:512`): they are two
+readings of one document, not two chances at the network, so a wedged proxy
+pays its connect timeout once and a normal page is downloaded once. A non-HTML
+body or a PDF skips both extractors. After the static path fails, its error picks
+the fallbacks (`fallbackRoute`, `core.ts:170`): wrong content type / too large →
+none; local-egress `fetch failed` → Browser Probe only (Jina's egress is blocked
+the same way); anti-bot wall → Browser Probe → Playwright, skipping Jina (its
+datacenter IP meets walls more often, not less — on pypi.org it returned the same
+Fastly challenge after 3.2s while Browser Probe passed in 0.65s, measured
+2026-10-14); anything else, incl. HTTP 5xx and JS shells → Jina → Browser Probe →
+Playwright. Every engine that accepts
+content also rejects anti-bot / login interstitials via the shared
+`looksLikeBotWall()` (`core.ts:48`)
+— a wall is HTTP 200 with page chrome and can be long enough to pass the length
+check, so accepting one used to end the chain with the wall as the answer. All
+`undici` connects are bounded to 3s (`core.ts:94`, via `proxyTls`/
+`requestTls.timeout` — a top-level `connectTimeout` does not reach ProxyAgent's
+connectors), so a wedged proxy hands over to the browser in ~3s, not 10s. The
+static fetch reads cookies from the running browser-probe browser on demand
+(`extensions/web-fetch/cookies.ts` — anonymous request first; cookies are read and
+the request retried once only on 401/403 or a 200 that is really a wall/JS
+shell, gated on `daemon status --json` so a stopped daemon is never started by a
+fetch; `--cookies <file>` / `PI_WF_COOKIES` override with a snapshot; 30s
+in-process cache). No daemon or no cookie match = anonymous, i.e. the previous
+behaviour, at no extra cost. Opt
+out of Defuddle with `--no-defuddle` or `PI_WF_PREFER_DEFUDDLE=0`. Domain
+extractors (5): bilibili, github, hackernews, reddit, wechat
+(`mp.weixin.qq.com/s/`). There is no zhihu extractor — zhihu goes through the
+bash `zhihu` CLI.
 
 **2. web-search** (`extensions/web-search/chain.ts`) — `brave → browser-probe`, stopping at
 the first *strong* result set. 0 matches counts as empty and the chain continues;

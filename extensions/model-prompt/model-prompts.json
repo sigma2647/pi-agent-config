@@ -1,0 +1,7 @@
+{
+  "_comment": "Keys match in order: provider/modelId -> modelId -> provider/* -> *. First hit wins. The value becomes the <model_guidance> section of the system prompt. This file is read on every request: edit and it applies immediately, no restart.",
+  "deepseek/deepseek-flash": "- 第一次调用工具前，先在思考里写出本次任务的档位（0–3）和该档的调用上限，再行动。档位 0 不调用工具。\n- 每次工具调用都写全参数。提交结果的工具（如 subagent_done）必须带完整报告正文；空参数等于任务没完成。\n- 思考不收敛就停：同一思路在思考里第二次出现，或换两种做法仍无进展，立即停止思考，输出当前最好的答案和「已确认 / 未确认 / 要确认还需读什么」。",
+  "local-claude/*": "This is a local model with a small context. Keep answers under 10 lines. Do not repeat the question. Use one tool call at a time.",
+  "zai/glm-5.3-flashx": "Prefer concise output. Skip restating file contents you already read.",
+  "zai/*": "Answer in Chinese."
+}

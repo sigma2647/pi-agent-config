@@ -77,6 +77,8 @@ Subagent panes are created without stealing keyboard focus (cmux, tmux). Launch 
 
 Subagent-only tools: `ask_question` (ask the parent and park) and `subagent_done` (interactive agents only).
 
+An interactive subagent that goes quiet after a clean turn — the model forgot `subagent_done`, or you stepped away from a pane you took over — hands its last message to the parent and closes after 15 minutes idle. Any input resets the timer; Esc-aborted runs, parked questions, and subagents with their own children still running never time out. Set `PI_SUBAGENT_IDLE_EXIT_MS` (milliseconds, `0` disables) to change it. An interactive subagent whose run ends in a provider error with nobody in the pane exits right away with an error report.
+
 | Command                    | Description                          |
 | -------------------------- | ------------------------------------ |
 | `/plan`                    | Start a full planning workflow       |
@@ -180,7 +182,7 @@ subagent({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer"
 | `task`                 | string  | required       | Task prompt for the sub-agent                                                                     |
 | `agent`                | string  | —              | Load defaults from agent definition                                                               |
 | `fork`                 | boolean | `false`        | Force the full-context fork mode for this spawn, overriding any agent `session-mode` frontmatter  |
-| `interactive`          | boolean | derived        | Mark this spawn as interactive (don't wake the parent on stall/recovery). Defaults to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit`. |
+| `interactive`          | boolean | derived        | Mark this spawn as interactive (don't wake the parent on stall/recovery). Defaults to the agent's `interactive` frontmatter, otherwise the inverse of `auto-exit`. Without `agent`, a non-fork spawn auto-exits unless this is `true`. |
 | `model`                | string  | session model  | Override the model. Resolution: param → agent `model` frontmatter → parent session's current model. Must be an exact `provider/model` reference available in this session (see `subagents_list`); unavailable references are rejected at spawn time. |
 | `systemPrompt`         | string  | —              | Append to system prompt                                                                           |
 | `skills`               | string  | —              | Comma-separated skill names                                                                       |
@@ -434,7 +436,7 @@ When set to `true`, the agent session shuts down automatically as soon as the ag
 
 **Behavior:**
 
-- The session closes after the agent's final message (on the `agent_end` event)
+- The session closes after the agent's final message, once pi settles (`agent_settled`, after any auto-retry or compaction)
 - If the user sends **any input** before the agent finishes, auto-exit is permanently disabled for that session — the user takes over interactively
 - The modeHint injected into the agent's task is adjusted accordingly: autonomous agents see "Complete your task autonomously." rather than instructions to call `subagent_done`
 
@@ -454,7 +456,7 @@ auto-exit: true
 
 Controls whether status transitions (`stalled`, `recovered`) wake the parent session with a steer message.
 
-**Default:** the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and ping the parent on stall/recovery; agents without `auto-exit` are interactive and stay quiet. Bare spawns with no agent defs (e.g. `/iterate` with `fork: true`) are treated as interactive.
+**Default:** the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and ping the parent on stall/recovery; agents without `auto-exit` are interactive and stay quiet. Bare spawns with no `agent` auto-exit and are non-interactive, unless forked (`/iterate`, `fork: true`) or spawned with `interactive: true` — those stay open until `subagent_done`.
 
 **Why it exists:** Interactive agents can run for minutes or hours while the user thinks, types, and reads in the subagent's pane. Child snapshots still update the widget, but stalled/recovered supervision messages rarely need to wake the parent for user-driven sessions. Skipping the steer keeps the parent quiet until the child actually finishes.
 

@@ -17,6 +17,10 @@ import subagentDoneExtension, {
   buildAskPayload,
   askQuestionToolResult,
   shouldAutoExitAfterTurn,
+  shouldExitInteractiveOnError,
+  shouldArmIdleExit,
+  idleExitMs,
+  DEFAULT_IDLE_EXIT_MS,
   shouldClearWaitingOnToolStart,
   shouldAutoExitOnAgentEnd,
 } from "../pi-extension/subagents/subagent-done.ts";
@@ -185,6 +189,12 @@ describe("shouldAutoExitAfterTurn", () => {
     );
   });
 
+  it("stays open while its own subagents are still running", () => {
+    const base = { autoExit: true, waitingForParent: false, userTookOver: false, messages: normalTurn };
+    assert.equal(shouldAutoExitAfterTurn({ ...base, runningChildren: 2 }), false);
+    assert.equal(shouldAutoExitAfterTurn({ ...base, runningChildren: 0 }), true);
+  });
+
   it("never auto-exits an interactive child", () => {
     assert.equal(
       shouldAutoExitAfterTurn({
@@ -337,14 +347,16 @@ describe("a parked child", () => {
 
       const ctx = { shutdown: () => { shutdown = true; } };
       const normalTurn = { messages: [{ role: "assistant", stopReason: "stop" }] };
-      handlers.get("agent_end")!(normalTurn, ctx);
+      handlers.get("agent_end")!(normalTurn);
+      handlers.get("agent_settled")!({ aborted: false }, ctx);
 
       assert.equal(shutdown, false, "a parked child must not auto-exit");
       assert.equal(existsSync(`${sessionFile}.exit`), false, "no done sidecar while parked");
 
       // The parent's reply arrives as a user message in this same session.
       handlers.get("input")!({});
-      handlers.get("agent_end")!(normalTurn, ctx);
+      handlers.get("agent_end")!(normalTurn);
+      handlers.get("agent_settled")!({ aborted: false }, ctx);
 
       assert.equal(shutdown, true, "once answered, the child exits normally");
       assert.equal(
@@ -356,6 +368,95 @@ describe("a parked child", () => {
       for (const [key, value] of saved) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
+      }
+    }
+  });
+});
+
+describe("shouldExitInteractiveOnError", () => {
+  const errored = [{ role: "assistant", stopReason: "error", errorMessage: "429" }];
+  const base = { autoExit: false, waitingForParent: false, userTookOver: false };
+
+  it("closes an unattended interactive child whose run ended in an error", () => {
+    assert.equal(shouldExitInteractiveOnError({ ...base, messages: errored }), true);
+  });
+
+  it("leaves the pane alone when a human took over, or the turn was clean", () => {
+    assert.equal(shouldExitInteractiveOnError({ ...base, userTookOver: true, messages: errored }), false);
+    assert.equal(
+      shouldExitInteractiveOnError({ ...base, messages: [{ role: "assistant", stopReason: "stop" }] }),
+      false,
+    );
+  });
+
+  it("does not apply to auto-exit children", () => {
+    assert.equal(shouldExitInteractiveOnError({ ...base, autoExit: true, messages: errored }), false);
+  });
+});
+
+describe("idle exit for interactive children", () => {
+  const clean = [{ role: "assistant", stopReason: "stop" }];
+  const base = { autoExit: false, waitingForParent: false, messages: clean };
+
+  it("defaults to 15 minutes; env overrides, 0 disables, junk falls back", () => {
+    assert.equal(DEFAULT_IDLE_EXIT_MS, 15 * 60_000);
+    assert.equal(idleExitMs(undefined), DEFAULT_IDLE_EXIT_MS);
+    assert.equal(idleExitMs("5000"), 5000);
+    assert.equal(idleExitMs("0"), 0);
+    assert.equal(idleExitMs("abc"), DEFAULT_IDLE_EXIT_MS);
+    assert.equal(idleExitMs(""), DEFAULT_IDLE_EXIT_MS);
+  });
+
+  it("arms after a clean interactive settle", () => {
+    assert.equal(shouldArmIdleExit(base), true);
+  });
+
+  it("does not arm when parked, aborted, errored, auto-exit, or with running children", () => {
+    assert.equal(shouldArmIdleExit({ ...base, waitingForParent: true }), false);
+    assert.equal(shouldArmIdleExit({ ...base, messages: [{ role: "assistant", stopReason: "aborted" }] }), false);
+    assert.equal(shouldArmIdleExit({ ...base, messages: [{ role: "assistant", stopReason: "error" }] }), false);
+    assert.equal(shouldArmIdleExit({ ...base, autoExit: true }), false);
+    assert.equal(shouldArmIdleExit({ ...base, runningChildren: 1 }), false);
+  });
+
+  it("closes the pane with a done sidecar once the window passes; input cancels it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "idle-exit-"));
+    const sessionFile = join(dir, "child.jsonl");
+    const saved = ["PI_SUBAGENT_SESSION", "PI_SUBAGENT_AUTO_EXIT", "PI_SUBAGENT_IDLE_EXIT_MS"].map(
+      (k) => [k, process.env[k]] as const,
+    );
+    process.env.PI_SUBAGENT_SESSION = sessionFile;
+    delete process.env.PI_SUBAGENT_AUTO_EXIT;
+    process.env.PI_SUBAGENT_IDLE_EXIT_MS = "20";
+    try {
+      const handlers = new Map<string, Function>();
+      subagentDoneExtension({
+        on(event: string, handler: Function) { handlers.set(event, handler); },
+        getAllTools() { return []; },
+        registerShortcut() {},
+        registerTool() {},
+      } as any);
+      let shutdown = 0;
+      const ctx = { shutdown: () => { shutdown++; } };
+      const settle = () => {
+        handlers.get("agent_end")!({ messages: clean });
+        handlers.get("agent_settled")!({ aborted: false }, ctx);
+      };
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+      settle();
+      handlers.get("input")!({});
+      await wait(50);
+      assert.equal(shutdown, 0, "input must cancel the pending idle exit");
+
+      settle();
+      await wait(50);
+      assert.equal(shutdown, 1);
+      assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
+    } finally {
+      for (const [k, v] of saved) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
       }
     }
   });
