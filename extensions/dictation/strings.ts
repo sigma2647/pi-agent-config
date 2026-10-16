@@ -43,7 +43,9 @@ export type Strings = {
   model: {
     missing: (id: string, mb: number) => string;
     downloading: (id: string, mb: number) => string;
-    progress: (percent: number, doneMb: number, totalMb: number) => string;
+    /** `line` is the already-formatted byte count, e.g. `642/802 MB`. */
+    progress: (line: string) => string;
+    alreadyDownloading: (id: string) => string;
     extracting: string;
     ready: (id: string) => string;
     deleted: (id: string) => string;
@@ -119,7 +121,8 @@ const zh: Strings = {
   model: {
     missing: (id, mb) => `本地模型 ${id} 未下载（约 ${mb} MB，压缩包）`,
     downloading: (id, mb) => `开始下载本地模型 ${id}（约 ${mb} MB）…`,
-    progress: (percent, doneMb, totalMb) => `下载中 ${percent}%（${doneMb}/${totalMb} MB）`,
+    progress: (line) => `下载中 ${line}`,
+    alreadyDownloading: (id) => `本地模型 ${id} 正在后台下载中`,
     extracting: "正在解压模型…",
     ready: (id) => `本地模型 ${id} 已就绪`,
     deleted: (id) => `已删除本地模型 ${id}`,
@@ -191,7 +194,8 @@ const en: Strings = {
   model: {
     missing: (id, mb) => `Local model ${id} not downloaded (~${mb} MB archive)`,
     downloading: (id, mb) => `Downloading local model ${id} (~${mb} MB)…`,
-    progress: (percent, doneMb, totalMb) => `Downloading ${percent}% (${doneMb}/${totalMb} MB)`,
+    progress: (line) => `Downloading ${line}`,
+    alreadyDownloading: (id) => `Local model ${id} is already downloading in the background`,
     extracting: "Extracting model…",
     ready: (id) => `Local model ${id} is ready`,
     deleted: (id) => `Deleted local model ${id}`,

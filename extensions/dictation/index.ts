@@ -125,6 +125,8 @@ export default async function dictationExtension(pi: ExtensionAPI) {
   let busy = false;
   /** Live prompt insert: prefix/suffix around the caret at record start. */
   let draft: LiveDraft | undefined;
+  /** Ids whose download is running in the background — a second one would write the same archive. */
+  const downloadsInFlight = new Set<string>();
 
   const notify = (ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void => {
     // The product name owns its own line: it is a label, not the first item of the
@@ -760,21 +762,43 @@ export default async function dictationExtension(pi: ExtensionAPI) {
         notify(ctx, `unknown local model "${id}" (known: ${knownModelIds().join(", ")})`, "error");
         return;
       }
-      const spec = localModelSpec(id)!;
-      notify(ctx, strings.model.downloading(id, spec.sizeMb));
-      let lastPercent = -10;
-      try {
-        await downloadModel(id, (_message, percent) => {
-          if (percent - lastPercent < 10) return;
-          lastPercent = percent;
-          if (ctx.hasUI) ctx.ui.setStatus("dictation-model", strings.model.progress(percent, 0, spec.sizeMb));
-        });
-        if (ctx.hasUI) ctx.ui.setStatus("dictation-model", undefined);
-        notify(ctx, strings.model.ready(id));
-      } catch (error) {
-        if (ctx.hasUI) ctx.ui.setStatus("dictation-model", undefined);
-        notify(ctx, strings.model.failed(errorText(error)), "error");
+      if (downloadsInFlight.has(id)) {
+        notify(ctx, strings.model.alreadyDownloading(id), "warning");
+        return;
       }
+      const spec = localModelSpec(id)!;
+      downloadsInFlight.add(id);
+      notify(ctx, strings.model.downloading(id, spec.sizeMb));
+      // The transfer runs in the background: awaiting ~800 MB here would block the
+      // session for its whole duration. Progress goes to the status line, the
+      // outcome to a notification when it lands.
+      void (async () => {
+        let lastPercent = -10;
+        try {
+          await downloadModel(
+            id,
+            (message, percent) => {
+              if (percent - lastPercent < 10) return;
+              lastPercent = percent;
+              if (ctx.hasUI) ctx.ui.setStatus("dictation-model", strings.model.progress(message));
+            },
+            undefined,
+            () => {
+              if (ctx.hasUI) ctx.ui.setStatus("dictation-model", strings.model.extracting);
+            },
+          );
+          if (ctx.hasUI) ctx.ui.setStatus("dictation-model", undefined);
+          notify(ctx, strings.model.ready(id));
+        } catch (error) {
+          if (ctx.hasUI) ctx.ui.setStatus("dictation-model", undefined);
+          notify(ctx, strings.model.failed(errorText(error)), "error");
+        } finally {
+          downloadsInFlight.delete(id);
+        }
+      })().catch(() => {
+        // The context went stale because a session switch or reload happened mid-download.
+        // The download itself is unaffected.
+      });
       return;
     }
 

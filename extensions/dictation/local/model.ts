@@ -46,6 +46,8 @@ export const downloadModel = async (
   id: string,
   onProgress?: DownloadProgress,
   signal?: AbortSignal,
+  /** Fired once the archive is on disk and extraction starts — the bytes stop moving here. */
+  onExtracting?: () => void,
 ): Promise<ModelState> => {
   const spec = localModelSpec(id);
   if (!spec) throw new Error(`unknown local model: ${id}`);
@@ -61,6 +63,7 @@ export const downloadModel = async (
     throw new Error(`download produced no usable archive at ${archive}`);
   }
 
+  onExtracting?.();
   await extractArchive(archive, modelDir(id));
   const state = modelState(id);
   if (!state.ready) {
