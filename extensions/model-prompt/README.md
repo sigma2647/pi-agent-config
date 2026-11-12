@@ -16,30 +16,48 @@ pi remove /home/lawrence/pi-agent-config/extensions/model-prompt   # 卸载
 仓库根目录的 `package.json` **不再**登记它（否则会和单独安装重复加载）。放回
 `pi.extensions` 列表即可改回「跟着仓库一起加载」。
 
-## 配置
+## 配置：一个模型一个文件
 
-同目录下的 `model-prompts.json`，不往 `~/.pi/agent` 放东西。用 `PI_MODEL_PROMPTS`
-可换路径。
+配置是插件目录下的 `prompts/` 目录，不用改代码、不用改 JSON：
 
-```json
-{
-  "deepseek/deepseek-flash": "回答用中文，短句，先说结论。",
-  "deepseek/*": "provider 级兜底",
-  "*": "所有模型都加"
-}
+```text
+prompts/
+  _default.md                      ← 所有模型都加
+  deepseek/
+    deepseek-flash.md              ← deepseek/deepseek-flash
+  zai/
+    glm-5.3-flashx.md              ← zai/glm-5.3-flashx
+    _default.md                    ← zai 下所有模型（原来的 zai/*）
+  local-claude/
+    _default.md                    ← local-claude 下所有模型
 ```
 
-键的匹配顺序：`provider/modelId` → `modelId` → `provider/*` → `*`，第一个命中的生效。
-值是一段文本。每次请求重新读文件，改完立即生效，不用重启。
+文件名就是模型 id，一个字都不能错（大小写敏感）。新建一个模型的支持 = 新建一个文件。
+
+用 `PI_MODEL_PROMPTS_DIR` 可把整个目录指到别处（例如放个人私有提示词）。
+
+## 匹配顺序
+
+按模型 `ctx.model` 找第一个**存在且非空**的文件：
+
+1. `prompts/<provider>/<modelId>.md`
+2. `prompts/<provider>/_default.md`
+3. `prompts/_default.md`
+
+都没命中就什么都不加。每次请求重新读文件，改完立即生效，不用重启。
 
 ## 行为
 
 - 只做加法：写一个段落，不整体替换 system prompt。这样 pi 仍能增量记录结构化段落，
   提示词前缀保持稳定（DeepSeek 按前缀缓存计价，前缀变了就全额付费）。
-- 配置缺失、损坏或无命中 → 什么都不做，不打断会话。
-- `/model-prompt` 显示当前模型命中了哪条规则。不命中通常是键写错了。
+- 文件缺失、为空或无命中 → 什么都不做，不打断会话。
+- `/model-prompt` 显示当前模型读到了哪个文件。不命中通常是路径或文件名写错。
 
 ## 注意
 
 写 `systemPromptOptions.sections` 是加法；如果确实要整段替换，才用返回
 `{ systemPrompt }` 的写法，代价是丢掉 pi 自动追加的 transcript 增量。
+
+旧版用 `model-prompts.json`（一个文件里塞所有键），已删除。把 JSON 的键翻成路径即可：
+`provider/modelId` → `<provider>/<modelId>.md`，`provider/*` → `<provider>/_default.md`，
+`*` → `_default.md`。
